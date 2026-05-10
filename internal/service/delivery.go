@@ -1,9 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"text/template"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,10 +22,11 @@ type Provider interface {
 }
 
 type DeliveryService struct {
-	repo     domain.NotificationRepository
-	limiter  domain.RateLimiter
-	idemp    *redis.IdempotencyGuard
-	provider Provider
+	repo         domain.NotificationRepository
+	templateRepo domain.TemplateRepository
+	limiter      domain.RateLimiter
+	idemp        *redis.IdempotencyGuard
+	provider     Provider
 }
 
 func NewDeliveryService(
@@ -135,4 +139,35 @@ func isClientError(err error) bool {
 
 func stringContains(s, substr string) bool {
 	return len(s) >= len(substr) && s[:len(substr)] == substr
+}
+
+func (s *DeliveryService) renderTemplate(ctx context.Context, n *domain.Notification) error {
+	if n.TemplateID == nil {
+		return nil // No template to render
+	}
+
+	tmplData, err := s.templateRepo.GetByID(ctx, *n.TemplateID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch template: %w", err)
+	}
+
+	// 1. Initialize Go text/template
+	tmpl, err := template.New("notification").Parse(tmplData.Body)
+	if err != nil {
+		return fmt.Errorf("invalid template syntax: %w", err)
+	}
+
+	// 2. Execute template with Payload variables
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, n.Payload); err != nil {
+		return fmt.Errorf("template execution failed: %w", err)
+	}
+
+	// 3. Overwrite payload with compiled content for the provider
+	n.Payload["compiled_body"] = buf.String()
+	if tmplData.Subject != nil {
+		n.Payload["compiled_subject"] = *tmplData.Subject
+	}
+
+	return nil
 }

@@ -6,9 +6,11 @@ CREATE TYPE channel_type AS ENUM ('SMS', 'EMAIL', 'PUSH');
 CREATE TABLE templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) UNIQUE NOT NULL,
-    content TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    channel VARCHAR(50) NOT NULL,
+    subject VARCHAR(255), -- Primarily for Email
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 3. Core Notifications Table
