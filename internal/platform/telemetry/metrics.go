@@ -1,53 +1,49 @@
 package telemetry
 
-import (
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
-)
-
-// We use promauto to automatically register these metrics with the global Prometheus registry.
-// They will be exposed automatically when we mount the promhttp.Handler() in our API router.
+import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	// NotificationsReceived tracks the ingress rate (The API edge).
-	// Labels allow us to query: "How many high-priority SMS messages did we receive?"
-	NotificationsReceived = promauto.NewCounterVec(
+	// NotificationsReceived tracks ingress
+	NotificationsReceived = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "notifications_received_total",
-			Help: "Total number of notification requests accepted by the API",
+			Help: "Total number of notifications received by the API",
 		},
-		[]string{"channel", "priority"},
+		[]string{"channel", "source"},
 	)
 
-	// NotificationsDelivered tracks the egress rate and error rate (The Worker edge).
-	// Status labels will be things like "SENT", "FAILED_PROVIDER_500", "FAILED_MAX_RETRIES".
-	NotificationsDelivered = promauto.NewCounterVec(
+	// NotificationsSent tracks egress outcomes
+	NotificationsSent = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "notifications_delivered_total",
-			Help: "Total number of notifications processed by workers",
+			Name: "notifications_sent_total",
+			Help: "Total number of notifications processed by the worker",
 		},
 		[]string{"channel", "status"},
 	)
 
-	// DeliveryLatency tracks the Duration of external provider API calls.
-	DeliveryLatency = promauto.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name: "delivery_latency_seconds",
-			Help: "Latency of external provider webhook delivery API calls",
-			// Buckets carefully tuned for fast API calls, extending out to timeout thresholds.
-			Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+	// RateLimitHits tracks throttled requests
+	RateLimitHits = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "notifications_rate_limited_total",
+			Help: "Total number of notifications throttled by rate limiter",
 		},
 		[]string{"channel"},
 	)
 
-	// RateLimitHits tracks how often our distributed Token Bucket blocks a worker.
-	// A high climb in this graph means we need to either negotiate a higher limit
-	// with our provider, or scale down our worker pool.
-	RateLimitHits = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "rate_limit_hits_total",
-			Help: "Total number of times a worker was throttled by the Redis Token Bucket",
+	// DeliveryLatency tracks how long the external provider takes
+	DeliveryLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "notification_delivery_duration_seconds",
+			Help:    "Latency of external provider delivery in seconds",
+			Buckets: prometheus.DefBuckets,
 		},
 		[]string{"channel"},
 	)
 )
+
+func init() {
+	prometheus.MustRegister(NotificationsReceived)
+	prometheus.MustRegister(NotificationsSent)
+	prometheus.MustRegister(RateLimitHits)
+	prometheus.MustRegister(DeliveryLatency)
+}

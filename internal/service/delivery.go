@@ -3,20 +3,22 @@ package service
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"log/slog"
 	"text/template"
 	"time"
 
-	"github.com/google/uuid"
-
 	"notification-system/internal/domain"
 	"notification-system/internal/platform/backoff"
-	"notification-system/internal/platform/redis"
+	"notification-system/internal/platform/telemetry"
+
+	"github.com/google/uuid"
 )
 
-// Provider defines the egress contract (implemented by our WebhookProvider).
+// StatusPublisher is defined locally for the service layer
+type StatusPublisher interface {
+	Publish(ctx context.Context, id, status string) error
+}
+
 type Provider interface {
 	Send(ctx context.Context, n *domain.Notification) error
 }
@@ -25,149 +27,91 @@ type DeliveryService struct {
 	repo         domain.NotificationRepository
 	templateRepo domain.TemplateRepository
 	limiter      domain.RateLimiter
-	idemp        *redis.IdempotencyGuard
+	idemp        domain.IdempotencyGuard
 	provider     Provider
+	statusPub    StatusPublisher
 }
 
-func NewDeliveryService(
-	repo domain.NotificationRepository,
-	limiter domain.RateLimiter,
-	idemp *redis.IdempotencyGuard,
-	provider Provider,
-) *DeliveryService {
-	return &DeliveryService{
-		repo:     repo,
-		limiter:  limiter,
-		idemp:    idemp,
-		provider: provider,
-	}
-}
-
-// HandleDelivery is injected into the RabbitMQ consumer.
 func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) error {
-	// 1. Fetch State
-	notification, err := s.repo.GetByID(ctx, id)
+	n, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		slog.ErrorContext(ctx, "failed to fetch notification", "id", id, "error", err)
-		return nil // Return nil (ACK) so RabbitMQ drops this orphaned ID
+		return fmt.Errorf("failed to fetch notification %s: %w", id, err)
 	}
 
-	// 2. Guard against max retries (Domain Rule: Max 5 attempts)
-	if notification.RetryCount >= 5 {
-		errMsg := "max retries exceeded"
-		_ = s.repo.UpdateStatus(ctx, id, domain.StatusFailed, notification.RetryCount, &errMsg)
-		return nil // ACK to drop
-	}
-
-	// 3. Egress Idempotency Check (Redis SETNX)
-	acquired, err := s.idemp.CheckAndSet(ctx, id)
-	if err != nil {
-		return err // Redis network error, NACK to requeue and try again
-	}
-	if !acquired {
-		slog.WarnContext(ctx, "duplicate message detected by idempotency guard, dropping", "id", id)
-		return nil // Already processing elsewhere, ACK to drop
-	}
-
-	// 4. Rate Limiting Check
-	allowed, err := s.limiter.Allow(ctx, notification.Channel)
-	if err != nil {
-		_ = s.idemp.Clear(ctx, id) // Release lock so it can be retried
-		return err                 // Redis error, NACK
-	}
-	if !allowed {
-		_ = s.idemp.Clear(ctx, id)
-		// We return an error here so the RabbitMQ consumer NACKs it with requeue=true
-		return errors.New("rate limited")
-	}
-
-	// 5. Execute Egress (Circuit Breaker protected)
-	err = s.provider.Send(ctx, notification)
-
-	// 6. Handle Success
-	if err == nil {
-		_ = s.repo.UpdateStatus(ctx, id, domain.StatusSent, notification.RetryCount, nil)
-		// Note: We intentionally DO NOT clear the idempotency lock on success.
-		// If RabbitMQ re-delivers this message due to a network blip, the lock will
-		// instantly catch it and drop it. The lock naturally expires in 24 hours.
+	if n.Status != domain.StatusPending {
 		return nil
 	}
 
-	// 7. Handle Failures
-	_ = s.idemp.Clear(ctx, id) // Release lock so Sweeper/Retries can grab it
+	// 1. Idempotency
+	locked, err := s.idemp.Acquire(ctx, id.String(), 10*time.Minute)
+	if err != nil || !locked {
+		return fmt.Errorf("could not acquire idempotency lock")
+	}
+	defer s.idemp.Release(ctx, id.String())
 
-	errStr := err.Error()
-
-	// If it's a 4xx Client Error, fail permanently
-	if isClientError(err) {
-		_ = s.repo.UpdateStatus(ctx, id, domain.StatusFailed, notification.RetryCount, &errStr)
-		return nil // ACK to drop
+	// 2. Rate Limiting (Fixed Signature)
+	allowed, err := s.limiter.Allow(ctx, n.Channel, n.Recipient)
+	if err != nil || !allowed {
+		telemetry.RateLimitHits.WithLabelValues(string(n.Channel)).Inc()
+		return s.repo.ScheduleRetry(ctx, id, time.Now().Add(time.Minute))
 	}
 
-	// If it's a 5xx or Circuit Breaker Open, schedule a delayed retry via the Sweeper
-	delay := backoff.Calculate(notification.RetryCount)
-	notification.SendAt = time.Now().Add(delay)
-	notification.Status = domain.StatusPending
-	notification.RetryCount++
-	notification.LastError = &errStr
-
-	// We update the DB to push the SendAt time into the future.
-	// We then ACK the message (return nil) to remove it from RabbitMQ immediately.
-	// The Sweeper (Epic 7) will find it in the DB when SendAt <= NOW() and push it back to the queue.
-	updateErr := s.repo.UpdateStatus(ctx, id, notification.Status, notification.RetryCount, &errStr)
-	if updateErr != nil {
-		return updateErr // If DB fails, NACK to hold in queue
+	// 3. Rendering
+	if n.TemplateID != nil {
+		if err := s.renderTemplate(ctx, n); err != nil {
+			return s.handleFailure(ctx, n, err, false)
+		}
 	}
 
-	// We must also update the SendAt time in the DB manually using a custom query
-	// (or augment our UpdateStatus method). For brevity in this file, assume UpdateStatus handles it
-	// or we write a quick raw query here to push the timestamp.
-	scheduleErr := s.repo.ScheduleRetry(ctx, id, notification.SendAt)
-	if scheduleErr != nil {
-		return scheduleErr
-	}
+	// 4. Provider Call & Latency Tracking
+	start := time.Now()
+	err = s.provider.Send(ctx, n)
+	duration := time.Since(start).Seconds()
 
-	return nil // ACK
-}
+	// FIXED: Observe requires label values for a HistogramVec
+	telemetry.DeliveryLatency.WithLabelValues(string(n.Channel)).Observe(duration)
 
-// isClientError checks if the error was a 4xx indicating a bad payload.
-func isClientError(err error) bool {
-	// In a real system, you might use errors.As() to check for a specific struct.
-	// We use strings.Contains matching the error we threw in provider/webhook.go.
-	return err != nil && stringContains(err.Error(), "4xx error")
-}
-
-func stringContains(s, substr string) bool {
-	return len(s) >= len(substr) && s[:len(substr)] == substr
-}
-
-func (s *DeliveryService) renderTemplate(ctx context.Context, n *domain.Notification) error {
-	if n.TemplateID == nil {
-		return nil // No template to render
-	}
-
-	tmplData, err := s.templateRepo.GetByID(ctx, *n.TemplateID)
 	if err != nil {
-		return fmt.Errorf("failed to fetch template: %w", err)
+		return s.handleFailure(ctx, n, err, true)
 	}
 
-	// 1. Initialize Go text/template
-	tmpl, err := template.New("notification").Parse(tmplData.Body)
-	if err != nil {
-		return fmt.Errorf("invalid template syntax: %w", err)
-	}
-
-	// 2. Execute template with Payload variables
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, n.Payload); err != nil {
-		return fmt.Errorf("template execution failed: %w", err)
-	}
-
-	// 3. Overwrite payload with compiled content for the provider
-	n.Payload["compiled_body"] = buf.String()
-	if tmplData.Subject != nil {
-		n.Payload["compiled_subject"] = *tmplData.Subject
+	// 5. Success
+	telemetry.NotificationsSent.WithLabelValues(string(n.Channel), "success").Inc()
+	if err := s.repo.UpdateStatus(ctx, id, domain.StatusSent, n.RetryCount, nil); err == nil {
+		_ = s.statusPub.Publish(ctx, id.String(), string(domain.StatusSent))
 	}
 
 	return nil
+}
+
+func (s *DeliveryService) renderTemplate(ctx context.Context, n *domain.Notification) error {
+	tmplData, err := s.templateRepo.GetByID(ctx, *n.TemplateID)
+	if err != nil {
+		return err
+	}
+	tmpl, err := template.New("notif").Parse(tmplData.Body)
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, n.Payload); err != nil {
+		return err
+	}
+	n.Payload["rendered_body"] = buf.String()
+	return nil
+}
+
+func (s *DeliveryService) handleFailure(ctx context.Context, n *domain.Notification, err error, retryable bool) error {
+	errMsg := err.Error()
+	telemetry.NotificationsSent.WithLabelValues(string(n.Channel), "error").Inc()
+
+	if !retryable || n.RetryCount >= 5 {
+		_ = s.repo.UpdateStatus(ctx, n.ID, domain.StatusFailed, n.RetryCount, &errMsg)
+		_ = s.statusPub.Publish(ctx, n.ID.String(), string(domain.StatusFailed))
+		return nil
+	}
+
+	retryAt := time.Now().Add(backoff.Calculate(n.RetryCount))
+	_ = s.repo.UpdateStatus(ctx, n.ID, domain.StatusPending, n.RetryCount+1, &errMsg)
+	return s.repo.ScheduleRetry(ctx, n.ID, retryAt)
 }

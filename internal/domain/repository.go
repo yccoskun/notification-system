@@ -15,15 +15,6 @@ type NotificationRepository interface {
 	ScheduleRetry(ctx context.Context, id uuid.UUID, sendAt time.Time) error
 }
 
-type TemplateRepository interface {
-	GetByID(ctx context.Context, id uuid.UUID) (*Template, error)
-	GetByName(ctx context.Context, name string) (*Template, error)
-}
-
 type BrokerPublisher interface {
 	Publish(ctx context.Context, notificationID uuid.UUID, priority int) error
-}
-
-type RateLimiter interface {
-	Allow(ctx context.Context, channel ChannelType) (bool, error)
 }
