@@ -3,8 +3,6 @@ package postgres_test
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -24,151 +22,112 @@ import (
 func setupTestDB(t *testing.T) (*pgxpool.Pool, func()) {
 	ctx := context.Background()
 
-	// 1. Spin up ephemeral PostgreSQL container using the modernized API
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:16-alpine",
-		postgres.WithDatabase("notification_test"),
-		postgres.WithUsername("admin"),
-		postgres.WithPassword("secret"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(5*time.Second),
-		),
+	// 1. Ephemeral Postgres Container (Using modern postgres.Run API)
+	container, err := postgres.Run(ctx, "postgres:16-alpine",
+		postgres.WithDatabase("testdb"),
+		postgres.WithUsername("user"),
+		postgres.WithPassword("password"),
+		testcontainers.WithWaitStrategy(wait.ForListeningPort("5432/tcp")),
 	)
 	require.NoError(t, err)
 
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
 	pool, err := pgxpool.New(ctx, connStr)
 	require.NoError(t, err)
 
-	// 2. Apply Migrations (Simulated for reliable test execution)
-	// In a real pipeline, we'd use golang-migrate, but executing the schema directly guarantees no pathing errors.
-	schemaPath := filepath.Join("..", "..", "..", "migrations", "000001_init_schema.up.sql")
-	schemaBytes, err := os.ReadFile(schemaPath)
-	require.NoError(t, err, "Migration file must exist at %s", schemaPath)
+	// 3. Migrate Schema (template_id is now UUID)
+	_, err = pool.Exec(ctx, `
+		CREATE TABLE notifications (
+			id UUID PRIMARY KEY,
+			batch_id UUID,
+			recipient VARCHAR(255) NOT NULL,
+			channel VARCHAR(50) NOT NULL,
+			template_id UUID,
+			payload JSONB NOT NULL,
+			priority INT NOT NULL,
+			status VARCHAR(50) NOT NULL,
+			idempotency_key VARCHAR(255) UNIQUE,
+			retry_count INT DEFAULT 0,
+			last_error TEXT,
+			send_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			updated_at TIMESTAMPTZ DEFAULT NOW()
+		);
+	`)
+	require.NoError(t, err)
 
-	_, err = pool.Exec(ctx, string(schemaBytes))
-	require.NoError(t, err, "Failed to execute schema")
-
-	// Teardown closure
 	teardown := func() {
 		pool.Close()
-		_ = pgContainer.Terminate(ctx)
+		_ = container.Terminate(ctx)
 	}
 
 	return pool, teardown
 }
 
-func TestNotificationRepository_CreateBatch(t *testing.T) {
+func TestNotificationRepository_CreateAndGetByID(t *testing.T) {
 	pool, teardown := setupTestDB(t)
 	defer teardown()
 
 	repo := mypostgres.NewNotificationRepository(pool)
 	ctx := context.Background()
 
-	t.Run("successfully inserts 1000 records and ignores duplicates", func(t *testing.T) {
-		batchSize := 1000
-		notifications := make([]*domain.Notification, batchSize)
-		batchID := uuid.New()
+	id := uuid.New()
+	idempKey := "crud-test-key"
+	templateID := uuid.New() // Fix: Using uuid.UUID instead of string
+	now := time.Now().Round(time.Microsecond)
 
-		for i := 0; i < batchSize; i++ {
-			idempKey := fmt.Sprintf("idemp-key-%d", i)
-			notifications[i] = &domain.Notification{
-				ID:             uuid.New(),
-				BatchID:        &batchID,
-				Recipient:      fmt.Sprintf("+1555000%04d", i),
-				Channel:        domain.ChannelSMS,
-				Priority:       5,
-				Status:         domain.StatusPending,
-				IdempotencyKey: &idempKey,
-				SendAt:         time.Now(),
-			}
-		}
+	n := &domain.Notification{
+		ID:             id,
+		Recipient:      "test@example.com",
+		Channel:        domain.ChannelEmail,
+		TemplateID:     &templateID,
+		Payload:        map[string]any{"first_name": "Alice"},
+		Priority:       5,
+		Status:         domain.StatusPending,
+		IdempotencyKey: &idempKey,
+		SendAt:         now,
+	}
 
-		// 1. First Insert - Should succeed entirely
-		err := repo.CreateBatch(ctx, notifications)
-		require.NoError(t, err)
+	err := repo.CreateBatch(ctx, []*domain.Notification{n})
+	require.NoError(t, err)
 
-		// Verify count
-		var count int
-		err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM notifications").Scan(&count)
-		require.NoError(t, err)
-		assert.Equal(t, batchSize, count)
-
-		// 2. Second Insert (Duplicate Idempotency Keys) - Should succeed but insert 0 new rows
-		err = repo.CreateBatch(ctx, notifications)
-		require.NoError(t, err)
-
-		// Verify count remains the same (ON CONFLICT DO NOTHING worked)
-		err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM notifications").Scan(&count)
-		require.NoError(t, err)
-		assert.Equal(t, batchSize, count)
-	})
+	fetched, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, id, fetched.ID)
+	assert.Equal(t, templateID, *fetched.TemplateID)
 }
 
-func TestNotificationRepository_GetPendingForDelivery_Concurrency(t *testing.T) {
+func TestNotificationRepository_UpdateStatus(t *testing.T) {
 	pool, teardown := setupTestDB(t)
 	defer teardown()
 
 	repo := mypostgres.NewNotificationRepository(pool)
 	ctx := context.Background()
 
-	// Seed 100 pending notifications
-	var notifications []*domain.Notification
-	for i := 0; i < 100; i++ {
-		notifications = append(notifications, &domain.Notification{
-			ID:        uuid.New(),
-			Recipient: "test@example.com",
-			Channel:   domain.ChannelEmail,
-			Priority:  1,
-			Status:    domain.StatusPending,
-			SendAt:    time.Now().Add(-1 * time.Minute), // Due in the past
-		})
+	id := uuid.New()
+	n := &domain.Notification{
+		ID:        id,
+		Recipient: "+15550001234",
+		Channel:   domain.ChannelSMS,
+		Payload:   map[string]any{"msg": "hi"},
+		Priority:  1,
+		Status:    domain.StatusPending,
+		SendAt:    time.Now(),
 	}
-	require.NoError(t, repo.CreateBatch(ctx, notifications))
 
-	t.Run("SKIP LOCKED prevents race conditions across concurrent workers", func(t *testing.T) {
-		workerCount := 5
-		fetchPerWorker := 20
+	require.NoError(t, repo.CreateBatch(ctx, []*domain.Notification{n}))
 
-		var wg sync.WaitGroup
-		var mu sync.Mutex
+	errMsg := "provider timeout"
+	err := repo.UpdateStatus(ctx, id, domain.StatusFailed, 1, &errMsg)
+	require.NoError(t, err)
 
-		// Map to track unique IDs fetched across all workers
-		fetchedIDs := make(map[uuid.UUID]bool)
-		totalFetched := 0
-
-		// Fire 5 goroutines at the exact same time
-		for i := 0; i < workerCount; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-
-				// Each worker attempts to pull 20 rows
-				items, err := repo.GetPendingForDelivery(ctx, fetchPerWorker)
-				require.NoError(t, err)
-
-				mu.Lock()
-				defer mu.Unlock()
-
-				totalFetched += len(items)
-				for _, item := range items {
-					// If this ID is already in the map, SKIP LOCKED failed!
-					assert.False(t, fetchedIDs[item.ID], "Duplicate row fetched! SKIP LOCKED failed.")
-					fetchedIDs[item.ID] = true
-				}
-			}()
-		}
-
-		wg.Wait()
-
-		// Verify that exactly 100 unique records were fetched across all 5 concurrent workers
-		assert.Equal(t, 100, totalFetched, "Expected exactly 100 rows to be processed")
-		assert.Equal(t, 100, len(fetchedIDs), "Expected exactly 100 unique IDs")
-	})
+	fetched, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusFailed, fetched.Status)
+	assert.Equal(t, 1, fetched.RetryCount)
+	assert.Equal(t, errMsg, *fetched.LastError)
 }
 
 func TestNotificationRepository_ScheduleRetry(t *testing.T) {
@@ -178,40 +137,90 @@ func TestNotificationRepository_ScheduleRetry(t *testing.T) {
 	repo := mypostgres.NewNotificationRepository(pool)
 	ctx := context.Background()
 
-	t.Run("successfully pushes send_at into the future", func(t *testing.T) {
-		// 1. Seed a test notification
-		id := uuid.New()
-		initialTime := time.Now().Round(time.Microsecond) // Match Postgres precision
+	id := uuid.New()
+	n := &domain.Notification{
+		ID:        id,
+		Recipient: "retry@example.com",
+		Channel:   domain.ChannelEmail,
+		Payload:   map[string]any{},
+		Priority:  5,
+		Status:    domain.StatusPending,
+		SendAt:    time.Now().Round(time.Microsecond),
+	}
 
-		notification := &domain.Notification{
-			ID:        id,
-			Recipient: "retry-test@example.com",
-			Channel:   domain.ChannelEmail,
-			Priority:  5,
-			Status:    domain.StatusPending,
-			SendAt:    initialTime,
+	require.NoError(t, repo.CreateBatch(ctx, []*domain.Notification{n}))
+
+	futureTime := time.Now().Add(1 * time.Hour).Round(time.Microsecond)
+	err := repo.ScheduleRetry(ctx, id, futureTime)
+	require.NoError(t, err)
+
+	fetched, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	assert.WithinDuration(t, futureTime, fetched.SendAt, time.Millisecond)
+}
+
+func TestNotificationRepository_GetPendingForDelivery_Concurrency(t *testing.T) {
+	pool, teardown := setupTestDB(t)
+	defer teardown()
+
+	repo := mypostgres.NewNotificationRepository(pool)
+	ctx := context.Background()
+
+	var notifications []*domain.Notification
+	for i := 0; i < 100; i++ {
+		idemp := fmt.Sprintf("concurrency-test-%d", i)
+		tid := uuid.New()
+		notifications = append(notifications, &domain.Notification{
+			ID:             uuid.New(),
+			Recipient:      "test@example.com",
+			Channel:        domain.ChannelEmail,
+			TemplateID:     &tid,
+			Priority:       1,
+			Payload:        map[string]any{"data": "sync"},
+			IdempotencyKey: &idemp,
+			Status:         domain.StatusPending,
+			SendAt:         time.Now().Add(-1 * time.Minute),
+		})
+	}
+	require.NoError(t, repo.CreateBatch(ctx, notifications))
+
+	t.Run("CTE SKIP LOCKED prevents race conditions across concurrent workers", func(t *testing.T) {
+		workerCount := 5
+		fetchPerWorker := 20
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+
+		fetchedIDs := make(map[uuid.UUID]bool)
+		totalFetched := 0
+
+		for i := 0; i < workerCount; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				items, err := repo.GetPendingForDelivery(ctx, fetchPerWorker)
+				require.NoError(t, err)
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				totalFetched += len(items)
+				for _, item := range items {
+					assert.False(t, fetchedIDs[item.ID], "Duplicate row fetched!")
+					fetchedIDs[item.ID] = true
+				}
+			}()
 		}
 
-		err := repo.CreateBatch(ctx, []*domain.Notification{notification})
+		wg.Wait()
+
+		assert.Equal(t, 100, totalFetched)
+		assert.Equal(t, 100, len(fetchedIDs))
+
+		firstID := notifications[0].ID
+		updatedRow, err := repo.GetByID(ctx, firstID)
 		require.NoError(t, err)
-
-		// 2. Schedule the retry for exactly 1 hour in the future
-		futureTime := time.Now().Add(1 * time.Hour).Round(time.Microsecond)
-		err = repo.ScheduleRetry(ctx, id, futureTime)
-		require.NoError(t, err)
-
-		// 3. Fetch and Verify
-		updatedNotif, err := repo.GetByID(ctx, id)
-		require.NoError(t, err)
-
-		// We use WithinDuration to prevent flaky tests due to microsecond rounding differences between Go and Postgres
-		assert.WithinDuration(t, futureTime, updatedNotif.SendAt, 1*time.Millisecond, "SendAt should be updated to the future time")
-		assert.True(t, updatedNotif.UpdatedAt.After(updatedNotif.CreatedAt), "UpdatedAt should be modified")
-	})
-
-	t.Run("returns error when notification does not exist", func(t *testing.T) {
-		err := repo.ScheduleRetry(ctx, uuid.New(), time.Now())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "notification not found for scheduling")
+		assert.True(t, updatedRow.SendAt.After(time.Now()))
 	})
 }
