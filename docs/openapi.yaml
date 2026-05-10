@@ -1,0 +1,163 @@
+openapi: 3.0.3
+info:
+  title: High-Throughput Notification API
+  description: Core ingress and management API for the distributed notification engine.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local Development Server
+
+paths:
+  /notifications:
+    post:
+      summary: Submit a single notification for async processing
+      operationId: createNotification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRequest'
+      responses:
+        '202':
+          description: Notification accepted for processing
+        '400':
+          description: Invalid payload schema
+
+  /notifications/batch:
+    post:
+      summary: Submit a batch of notifications for async processing
+      operationId: submitBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchSubmitRequest'
+      responses:
+        '202':
+          description: Batch accepted for processing
+        '400':
+          description: Invalid payload schema
+
+  /notifications/{id}:
+    get:
+      summary: Retrieve the status of a specific notification
+      operationId: getNotificationStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Notification details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+        '404':
+          description: Notification not found
+          
+    delete:
+      summary: Cancel a pending notification
+      operationId: cancelNotification
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Notification successfully cancelled
+        '404':
+          description: Notification not found
+        '409':
+          description: Conflict (Notification already sent or failed)
+
+components:
+  schemas:
+    CreateRequest:
+      type: object
+      required:
+        - idempotency_key
+        - recipient
+        - channel
+        - payload
+      properties:
+        idempotency_key:
+          type: string
+          example: "req-single-123"
+        recipient:
+          type: string
+          example: "+15551234567"
+        channel:
+          type: string
+          enum: [SMS, EMAIL, PUSH]
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 5
+        payload:
+          type: object
+          additionalProperties: true
+
+    BatchSubmitRequest:
+      type: object
+      required:
+        - idempotency_key
+        - notifications
+      properties:
+        idempotency_key:
+          type: string
+          example: "req-batch-123"
+        notifications:
+          type: array
+          maxItems: 1000
+          items:
+            type: object
+            required:
+              - recipient
+              - channel
+              - payload
+            properties:
+              recipient:
+                type: string
+              channel:
+                type: string
+                enum: [SMS, EMAIL, PUSH]
+              priority:
+                type: integer
+              payload:
+                type: object
+                additionalProperties: true
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        recipient:
+          type: string
+        channel:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, SENT, FAILED]
+        retry_count:
+          type: integer
+        last_error:
+          type: string
+          nullable: true
+        send_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time

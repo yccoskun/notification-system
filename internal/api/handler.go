@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -27,7 +28,16 @@ func NewNotificationHandler(repo domain.NotificationRepository, publisher Broker
 	return &NotificationHandler{repo: repo, publisher: publisher}
 }
 
-// BatchSubmitRequest defines the expected JSON payload from clients.
+// --- DTOs (Data Transfer Objects) ---
+
+type CreateRequest struct {
+	IdempotencyKey string             `json:"idempotency_key" binding:"required"`
+	Recipient      string             `json:"recipient" binding:"required"`
+	Channel        domain.ChannelType `json:"channel" binding:"required,oneof=SMS EMAIL PUSH"`
+	Priority       int                `json:"priority" binding:"min=1,max=10"`
+	Payload        map[string]any     `json:"payload" binding:"required"`
+}
+
 type BatchSubmitRequest struct {
 	IdempotencyKey string `json:"idempotency_key" binding:"required"`
 	Notifications  []struct {
@@ -38,9 +48,56 @@ type BatchSubmitRequest struct {
 	} `json:"notifications" binding:"required,max=1000"`
 }
 
-// HandleBatchSubmit processes high-throughput ingress traffic.
+// --- Route Handlers ---
+
+// HandleCreate processes a single notification request.
+func (h *NotificationHandler) HandleCreate(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var req CreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload schema", "details": err.Error()})
+		return
+	}
+
+	id := uuid.New()
+	now := time.Now()
+
+	notification := &domain.Notification{
+		ID:             id,
+		BatchID:        nil,
+		Recipient:      req.Recipient,
+		Channel:        req.Channel,
+		Priority:       req.Priority,
+		Status:         domain.StatusPending,
+		Payload:        req.Payload,
+		IdempotencyKey: &req.IdempotencyKey,
+		SendAt:         now,
+	}
+
+	telemetry.NotificationsReceived.WithLabelValues(string(notification.Channel), "api").Inc()
+
+	// Dual-Write: Persist to Postgres first
+	if err := h.repo.CreateBatch(ctx, []*domain.Notification{notification}); err != nil {
+		slog.ErrorContext(ctx, "failed to insert single notification", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	// Fast-Path: Publish to RabbitMQ
+	err := h.publisher.Publish(ctx, notification.ID, notification.Priority)
+	if err != nil {
+		slog.WarnContext(ctx, "fast-path publish failed, falling back to sweeper", "id", notification.ID, "error", err)
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":         "notification accepted for processing",
+		"notification_id": id.String(),
+	})
+}
+
+// HandleBatchSubmit processes high-throughput bulk ingress traffic.
 func (h *NotificationHandler) HandleBatchSubmit(c *gin.Context) {
-	// 1. Extract the trace-injected context from Gin
 	ctx := c.Request.Context()
 
 	var req BatchSubmitRequest
@@ -49,7 +106,6 @@ func (h *NotificationHandler) HandleBatchSubmit(c *gin.Context) {
 		return
 	}
 
-	// 2. Map HTTP DTOs to Domain Entities
 	batchID := uuid.New()
 	domainNotifications := make([]*domain.Notification, len(req.Notifications))
 	now := time.Now()
@@ -68,31 +124,80 @@ func (h *NotificationHandler) HandleBatchSubmit(c *gin.Context) {
 			SendAt:         now,
 		}
 
-		// Prometheus Metric: Record ingress intent
 		telemetry.NotificationsReceived.WithLabelValues(string(item.Channel), "api").Inc()
 	}
 
-	// 3. Persist to Database (The Source of Truth)
+	// Dual-Write: Persist to Postgres
 	if err := h.repo.CreateBatch(ctx, domainNotifications); err != nil {
 		slog.ErrorContext(ctx, "failed to insert notification batch", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 
-	// 4. Fast-Path Publish to RabbitMQ
+	// Fast-Path: Publish to RabbitMQ
 	for _, n := range domainNotifications {
 		err := h.publisher.Publish(ctx, n.ID, n.Priority)
 		if err != nil {
-			// WE DO NOT FAIL THE HTTP REQUEST HERE.
-			// We log it. The Sweeper will catch it later.
 			slog.WarnContext(ctx, "fast-path publish failed, falling back to sweeper", "id", n.ID, "error", err)
 		}
 	}
 
-	// 5. Return 202 Accepted (Asynchronous Processing)
 	c.JSON(http.StatusAccepted, gin.H{
 		"message":  "batch accepted for processing",
 		"batch_id": batchID.String(),
 		"count":    len(domainNotifications),
 	})
+}
+
+// HandleGetStatus retrieves the current state of a specific notification.
+func (h *NotificationHandler) HandleGetStatus(c *gin.Context) {
+	idParam := c.Param("id")
+	id, err := uuid.Parse(idParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid notification ID format"})
+		return
+	}
+
+	notification, err := h.repo.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "notification not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, notification)
+}
+
+// HandleCancel attempts to abort a notification before it is sent.
+func (h *NotificationHandler) HandleCancel(c *gin.Context) {
+	idParam := c.Param("id")
+	id, err := uuid.Parse(idParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid notification ID format"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	notification, err := h.repo.GetByID(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "notification not found"})
+		return
+	}
+
+	if notification.Status != domain.StatusPending {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":   "cannot cancel notification",
+			"details": fmt.Sprintf("notification is currently in status: %s", notification.Status),
+		})
+		return
+	}
+
+	cancelReason := "cancelled by user via API"
+	err = h.repo.UpdateStatus(ctx, id, domain.StatusFailed, notification.RetryCount, &cancelReason)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process cancellation"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "notification successfully cancelled"})
 }
