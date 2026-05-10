@@ -170,3 +170,48 @@ func TestNotificationRepository_GetPendingForDelivery_Concurrency(t *testing.T) 
 		assert.Equal(t, 100, len(fetchedIDs), "Expected exactly 100 unique IDs")
 	})
 }
+
+func TestNotificationRepository_ScheduleRetry(t *testing.T) {
+	pool, teardown := setupTestDB(t)
+	defer teardown()
+
+	repo := mypostgres.NewNotificationRepository(pool)
+	ctx := context.Background()
+
+	t.Run("successfully pushes send_at into the future", func(t *testing.T) {
+		// 1. Seed a test notification
+		id := uuid.New()
+		initialTime := time.Now().Round(time.Microsecond) // Match Postgres precision
+
+		notification := &domain.Notification{
+			ID:        id,
+			Recipient: "retry-test@example.com",
+			Channel:   domain.ChannelEmail,
+			Priority:  5,
+			Status:    domain.StatusPending,
+			SendAt:    initialTime,
+		}
+
+		err := repo.CreateBatch(ctx, []*domain.Notification{notification})
+		require.NoError(t, err)
+
+		// 2. Schedule the retry for exactly 1 hour in the future
+		futureTime := time.Now().Add(1 * time.Hour).Round(time.Microsecond)
+		err = repo.ScheduleRetry(ctx, id, futureTime)
+		require.NoError(t, err)
+
+		// 3. Fetch and Verify
+		updatedNotif, err := repo.GetByID(ctx, id)
+		require.NoError(t, err)
+
+		// We use WithinDuration to prevent flaky tests due to microsecond rounding differences between Go and Postgres
+		assert.WithinDuration(t, futureTime, updatedNotif.SendAt, 1*time.Millisecond, "SendAt should be updated to the future time")
+		assert.True(t, updatedNotif.UpdatedAt.After(updatedNotif.CreatedAt), "UpdatedAt should be modified")
+	})
+
+	t.Run("returns error when notification does not exist", func(t *testing.T) {
+		err := repo.ScheduleRetry(ctx, uuid.New(), time.Now())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "notification not found for scheduling")
+	})
+}

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -130,4 +131,21 @@ func (r *NotificationRepository) GetPendingForDelivery(ctx context.Context, batc
 	}
 
 	return notifications, nil
+}
+
+// ScheduleRetry implements the delayed retry logic by pushing the send_at timestamp into the future.
+func (r *NotificationRepository) ScheduleRetry(ctx context.Context, id uuid.UUID, sendAt time.Time) error {
+	query := `
+		UPDATE notifications 
+		SET send_at = $1, updated_at = NOW() 
+		WHERE id = $2`
+
+	tag, err := r.db.Exec(ctx, query, sendAt, id)
+	if err != nil {
+		return fmt.Errorf("failed to schedule retry: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("notification not found for scheduling")
+	}
+	return nil
 }
