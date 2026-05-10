@@ -9,7 +9,7 @@ import (
 )
 
 // NewRouter initializes the HTTP engine and maps all routes.
-func NewRouter(serviceName string, notifHandler *NotificationHandler) *gin.Engine {
+func NewRouter(serviceName string, notifHandler *NotificationHandler, wsHub *WSHub) *gin.Engine {
 	// Disable default verbose logging for production performance
 	gin.SetMode(gin.ReleaseMode)
 
@@ -32,6 +32,7 @@ func NewRouter(serviceName string, notifHandler *NotificationHandler) *gin.Engin
 		v1.POST("/notifications/batch", notifHandler.HandleBatchSubmit)
 		v1.GET("/notifications/:id", notifHandler.HandleGetStatus)
 		v1.DELETE("/notifications/:id", notifHandler.HandleCancel)
+		v1.GET("/ws", wsHub.HandleWebSocket)
 	}
 
 	return r
