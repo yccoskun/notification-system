@@ -1,0 +1,72 @@
+# =========================
+# Go Specific
+# =========================
+# Compiled Object files, Static and Dynamic libs (Shared Objects)
+*.a
+*.o
+*.so
+*.dylib
+
+# Folders for compiled binaries (Our Makefile targets this)
+bin/
+out/
+build/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Go workspace file
+go.work
+go.work.sum
+
+# =========================
+# Project Specific
+# =========================
+# Coverage and profiling metrics from our `make test` command
+coverage.out
+*.prof
+*.cgo1.go
+*.cgo2.c
+_cgo_defun.c
+_cgo_gotypes.go
+_cgo_export.*
+
+# Environment variables (Never commit secrets)
+.env
+.env.local
+.env.*
+
+# =========================
+# IDEs and Editors
+# =========================
+# JetBrains (GoLand, IntelliJ)
+.idea/
+*.iml
+out/
+gen/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# =========================
+# OS Specific
+# =========================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
