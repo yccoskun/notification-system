@@ -32,7 +32,7 @@ CREATE TABLE notifications (
 );
 
 -- The Sweeper Index: Only indexes unresolved messages.
-CREATE INDEX idx_notifications_sweeper ON notifications(send_at) WHERE status = 'PENDING';
+CREATE INDEX idx_notifications_sweeper ON notifications(priority DESC, send_at ASC) WHERE status = 'PENDING';
 
 -- Batch Index: For client queries fetching batch status.
 CREATE INDEX idx_notifications_batch ON notifications(batch_id) WHERE batch_id IS NOT NULL;

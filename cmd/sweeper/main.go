@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -28,6 +29,9 @@ func main() {
 	_, ch, err := rabbitmq.NewChannel(os.Getenv("RABBITMQ_URL"))
 	if err != nil {
 		panic(err)
+	}
+	if err := rabbitmq.SetupTopology(ch); err != nil {
+		panic(fmt.Sprintf("failed to setup rabbitmq topology: %v", err))
 	}
 	rmqPub := rabbitmq.NewPublisher(ch)
 	repo := postgres.NewNotificationRepository(dbPool)

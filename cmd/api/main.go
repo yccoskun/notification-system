@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -30,12 +31,24 @@ func main() {
 		defer shutdownTracer(context.Background())
 	}
 
+	// DB Migrations
+	dbURL := os.Getenv("DATABASE_URL")
+	slog.Info("checking database migrations...")
+	if err := postgres.RunMigrations(dbURL); err != nil {
+		// We panic here because if migrations fail,
+		// the app's repositories will crash anyway.
+		panic(fmt.Sprintf("migration failed: %v", err))
+	}
+
 	// 1. Platform Setup (DB, Redis, RMQ)
-	dbPool := postgres.MustConnect(os.Getenv("DATABASE_URL"))
+	dbPool := postgres.MustConnect(dbURL)
 	rdb := redis.NewClient(&redis.Options{Addr: os.Getenv("REDIS_URL")})
 	_, ch, err := rabbitmq.NewChannel(os.Getenv("RABBITMQ_URL"))
 	if err != nil {
 		panic(err)
+	}
+	if err := rabbitmq.SetupTopology(ch); err != nil {
+		panic(fmt.Sprintf("failed to setup rabbitmq topology: %v", err))
 	}
 	rmqPub := rabbitmq.NewPublisher(ch)
 

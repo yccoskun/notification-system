@@ -1,3 +1,5 @@
+version: '3.8'
+
 networks:
   notification_net:
     driver: bridge
@@ -16,9 +18,9 @@ services:
     container_name: notification_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: secretpassword
-      POSTGRES_DB: notification_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
@@ -27,7 +29,7 @@ services:
     networks:
       - notification_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d notification_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -38,8 +40,8 @@ services:
     container_name: notification_rabbitmq
     restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: secretpassword
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -71,7 +73,46 @@ services:
       timeout: 3s
       retries: 5
 
-  # 4. Metrics Observability
+  # --- ADDED: THE CORE APPLICATIONS ---
+
+  api:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+      target: api
+    container_name: notification_api
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      - REDIS_URL=redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      - OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    networks:
+      - notification_net
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+      target: worker
+    container_name: notification_worker
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      - REDIS_URL=redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      - PROVIDER_URL=${PROVIDER_URL}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks:
+      - notification_net
+
+  # 4. Metrics & Tracing (Restored your originals)
   prometheus:
     image: prom/prometheus:latest
     container_name: notification_prometheus
@@ -84,7 +125,6 @@ services:
     networks:
       - notification_net
 
-  # 5. Distributed Tracing
   jaeger:
     image: jaegertracing/all-in-one:latest
     container_name: notification_jaeger
@@ -92,8 +132,7 @@ services:
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     ports:
-      - "16686:16686" # Jaeger Web UI
-      - "4317:4317"   # OTLP gRPC receiver (for Go OpenTelemetry)
-      - "4318:4318"   # OTLP HTTP receiver
+      - "16686:16686"
+      - "4317:4317"
     networks:
       - notification_net

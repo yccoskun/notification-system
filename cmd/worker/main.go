@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +16,7 @@ import (
 	"notification-system/internal/platform/telemetry"
 	"notification-system/internal/service"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -43,10 +46,21 @@ func main() {
 		repo, tmplRepo, limiter, idemp, webhookProvider, statusPub,
 	)
 
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		slog.Info("Worker metrics started on :8081")
+		if err := http.ListenAndServe(":8081", nil); err != nil {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
+
 	// 4. RabbitMQ Consumer
 	_, ch, err := rabbitmq.NewChannel(os.Getenv("RABBITMQ_URL"))
 	if err != nil {
 		panic(err)
+	}
+	if err := rabbitmq.SetupTopology(ch); err != nil {
+		panic(fmt.Sprintf("failed to setup rabbitmq topology: %v", err))
 	}
 	consumer := rabbitmq.NewConsumer(ch)
 
