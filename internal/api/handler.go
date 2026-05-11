@@ -35,7 +35,7 @@ type CreateRequest struct {
 	Recipient      string             `json:"recipient" binding:"required"`
 	Channel        domain.ChannelType `json:"channel" binding:"required,oneof=SMS EMAIL PUSH"`
 	TemplateID     *uuid.UUID         `json:"template_id"`
-	Priority       int                `json:"priority" binding:"min=1,max=10"`
+	Priority       int                `json:"priority" binding:"max=10"`
 	Payload        map[string]any     `json:"payload" binding:"required"`
 }
 
@@ -45,7 +45,7 @@ type BatchSubmitRequest struct {
 		Recipient  string             `json:"recipient" binding:"required"`
 		Channel    domain.ChannelType `json:"channel" binding:"required,oneof=SMS EMAIL PUSH"`
 		TemplateID *uuid.UUID         `json:"template_id"`
-		Priority   int                `json:"priority" binding:"min=1,max=10"`
+		Priority   int                `json:"priority" binding:"max=10"`
 		Payload    map[string]any     `json:"payload" binding:"required"`
 	} `json:"notifications" binding:"required,max=1000"`
 }
@@ -64,14 +64,17 @@ func (h *NotificationHandler) HandleCreate(c *gin.Context) {
 
 	id := uuid.New()
 	now := time.Now()
-
+	priority := req.Priority
+	if priority == 0 {
+		priority = 5
+	}
 	notification := &domain.Notification{
 		ID:             id,
 		BatchID:        nil,
 		Recipient:      req.Recipient,
 		Channel:        req.Channel,
 		TemplateID:     req.TemplateID,
-		Priority:       req.Priority,
+		Priority:       priority,
 		Status:         domain.StatusPending,
 		Payload:        req.Payload,
 		IdempotencyKey: &req.IdempotencyKey,
