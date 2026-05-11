@@ -27,6 +27,7 @@ jobs:
       with:
         version: 'v1.64.8'
         install-mode: goinstall
+        timeout-minutes: 10
 
     - name: Run Unit & Integration Tests (Testcontainers)
       run: make test
