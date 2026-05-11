@@ -101,6 +101,67 @@ func TestNotificationRepository_CreateAndGetByID(t *testing.T) {
 	assert.Equal(t, templateID, *fetched.TemplateID)
 }
 
+func TestNotificationRepository_GetByBatchID(t *testing.T) {
+	pool, teardown := setupTestDB(t)
+	defer teardown()
+
+	repo := mypostgres.NewNotificationRepository(pool)
+	ctx := context.Background()
+
+	batchID := uuid.New()
+	now := time.Now().Round(time.Microsecond)
+	otherBatch := uuid.New()
+
+	n1 := &domain.Notification{
+		ID:             uuid.New(),
+		BatchID:        &batchID,
+		Recipient:      "a@example.com",
+		Channel:        domain.ChannelEmail,
+		Payload:        map[string]any{"k": 1},
+		Priority:       5,
+		Status:         domain.StatusPending,
+		IdempotencyKey: stringPtr("batch-test-a"),
+		SendAt:         now,
+	}
+	n2 := &domain.Notification{
+		ID:             uuid.New(),
+		BatchID:        &batchID,
+		Recipient:      "b@example.com",
+		Channel:        domain.ChannelEmail,
+		Payload:        map[string]any{"k": 2},
+		Priority:       3,
+		Status:         domain.StatusPending,
+		IdempotencyKey: stringPtr("batch-test-b"),
+		SendAt:         now,
+	}
+	nOther := &domain.Notification{
+		ID:             uuid.New(),
+		BatchID:        &otherBatch,
+		Recipient:      "other@example.com",
+		Channel:        domain.ChannelEmail,
+		Payload:        map[string]any{},
+		Priority:       1,
+		Status:         domain.StatusPending,
+		IdempotencyKey: stringPtr("batch-test-other"),
+		SendAt:         now,
+	}
+
+	_, err := repo.CreateBatch(ctx, []*domain.Notification{n1, n2, nOther})
+	require.NoError(t, err)
+
+	list, err := repo.GetByBatchID(ctx, batchID)
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	assert.ElementsMatch(t, []uuid.UUID{n1.ID, n2.ID}, []uuid.UUID{list[0].ID, list[1].ID})
+	for _, row := range list {
+		assert.Equal(t, batchID, *row.BatchID)
+	}
+
+	empty, err := repo.GetByBatchID(ctx, uuid.New())
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
 func TestNotificationRepository_UpdateStatus(t *testing.T) {
 	pool, teardown := setupTestDB(t)
 	defer teardown()
@@ -222,3 +283,5 @@ func TestNotificationRepository_Idempotency(t *testing.T) {
 	// PROOF: inserted2 should be empty because of ON CONFLICT DO NOTHING
 	assert.Empty(t, inserted2)
 }
+
+func stringPtr(s string) *string { return &s }

@@ -90,6 +90,38 @@ func (r *NotificationRepository) GetByID(ctx context.Context, id uuid.UUID) (*do
 	return &n, nil
 }
 
+// GetByBatchID returns all notifications belonging to an ingress batch, ordered by creation time.
+func (r *NotificationRepository) GetByBatchID(ctx context.Context, batchID uuid.UUID) ([]*domain.Notification, error) {
+	query := `
+		SELECT id, batch_id, recipient, channel, template_id, payload, priority,
+		       status, idempotency_key, retry_count, last_error, send_at, created_at, updated_at
+		FROM notifications WHERE batch_id = $1
+		ORDER BY created_at ASC, id ASC`
+
+	rows, err := r.db.Query(ctx, query, batchID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list notifications by batch: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]*domain.Notification, 0)
+	for rows.Next() {
+		var n domain.Notification
+		err := rows.Scan(
+			&n.ID, &n.BatchID, &n.Recipient, &n.Channel, &n.TemplateID, &n.Payload, &n.Priority,
+			&n.Status, &n.IdempotencyKey, &n.RetryCount, &n.LastError, &n.SendAt, &n.CreatedAt, &n.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan notification: %w", err)
+		}
+		out = append(out, &n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+	return out, nil
+}
+
 // UpdateStatus records the outcome of a delivery attempt.
 func (r *NotificationRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status domain.NotificationStatus, retryCount int, lastErr *string) error {
 	query := `

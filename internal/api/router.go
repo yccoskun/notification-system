@@ -30,6 +30,7 @@ func NewRouter(serviceName string, notifHandler *NotificationHandler, wsHub *WSH
 	{
 		v1.POST("/notifications", notifHandler.HandleCreate)
 		v1.POST("/notifications/batch", notifHandler.HandleBatchSubmit)
+		v1.GET("/notifications/batch/:batch_id", notifHandler.HandleGetBatchStatus)
 		v1.GET("/notifications/:id", notifHandler.HandleGetStatus)
 		v1.DELETE("/notifications/:id", notifHandler.HandleCancel)
 		v1.GET("/ws", wsHub.HandleWebSocket)

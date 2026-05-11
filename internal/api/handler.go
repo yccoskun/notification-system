@@ -188,6 +188,28 @@ func (h *NotificationHandler) HandleGetStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, notification)
 }
 
+// HandleGetBatchStatus returns the current state of every notification in an ingress batch.
+func (h *NotificationHandler) HandleGetBatchStatus(c *gin.Context) {
+	batchParam := c.Param("batch_id")
+	batchID, err := uuid.Parse(batchParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid batch ID format"})
+		return
+	}
+
+	notifications, err := h.repo.GetByBatchID(c.Request.Context(), batchID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"batch_id":        batchID.String(),
+		"count":           len(notifications),
+		"notifications": notifications,
+	})
+}
+
 // HandleCancel attempts to abort a notification before it is sent.
 func (h *NotificationHandler) HandleCancel(c *gin.Context) {
 	idParam := c.Param("id")

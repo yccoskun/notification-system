@@ -40,6 +40,27 @@ paths:
         '400':
           description: Invalid payload schema
 
+  /notifications/batch/{batch_id}:
+    get:
+      summary: List notification statuses for an ingress batch
+      operationId: getBatchNotificationStatus
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Batch id, count, and full notification records (empty notifications when no rows match)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchStatusResponse'
+        '400':
+          description: Invalid batch ID format
+
   /notifications/{id}:
     get:
       summary: Retrieve the status of a specific notification
@@ -136,6 +157,24 @@ components:
               payload:
                 type: object
                 additionalProperties: true
+
+    BatchStatusResponse:
+      type: object
+      required:
+        - batch_id
+        - count
+        - notifications
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        count:
+          type: integer
+          minimum: 0
+        notifications:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
 
     Notification:
       type: object
