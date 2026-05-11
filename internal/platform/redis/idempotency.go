@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -22,24 +21,17 @@ func NewIdempotencyGuard(client *redis.Client) *IdempotencyGuard {
 	}
 }
 
-// CheckAndSet attempts to acquire an exclusive lock for this notification ID.
-// Returns true if the lock was acquired (safe to process), false if already processed.
-func (i *IdempotencyGuard) CheckAndSet(ctx context.Context, notificationID uuid.UUID) (bool, error) {
-	key := fmt.Sprintf("idemp:worker:%s", notificationID.String())
-
-	// SETNX (Set if Not eXists) is perfectly atomic.
-	// We set the value to "1". The actual value doesn't matter, only the key's existence.
-	success, err := i.client.SetNX(ctx, key, "1", i.ttl).Result()
+func (i *IdempotencyGuard) Acquire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	// Note: We use the key as provided or prefix it
+	fullKey := fmt.Sprintf("idemp:worker:%s", key)
+	success, err := i.client.SetNX(ctx, fullKey, "1", ttl).Result()
 	if err != nil {
 		return false, fmt.Errorf("failed to execute redis SETNX: %w", err)
 	}
-
 	return success, nil
 }
 
-// Clear allows a worker to remove the lock if the message fundamentally failed
-// (e.g., 500 from provider) and needs to be completely re-processed later by the Sweeper.
-func (i *IdempotencyGuard) Clear(ctx context.Context, notificationID uuid.UUID) error {
-	key := fmt.Sprintf("idemp:worker:%s", notificationID.String())
-	return i.client.Del(ctx, key).Err()
+func (i *IdempotencyGuard) Release(ctx context.Context, key string) error {
+	fullKey := fmt.Sprintf("idemp:worker:%s", key)
+	return i.client.Del(ctx, fullKey).Err()
 }

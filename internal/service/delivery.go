@@ -89,15 +89,22 @@ func (s *DeliveryService) renderTemplate(ctx context.Context, n *domain.Notifica
 	if err != nil {
 		return err
 	}
+
 	tmpl, err := template.New("notif").Parse(tmplData.Body)
 	if err != nil {
 		return err
 	}
+
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, n.Payload); err != nil {
 		return err
 	}
-	n.Payload["rendered_body"] = buf.String()
+
+	// Standardize these keys so all providers know where to look
+	n.Payload["_rendered_content"] = buf.String()
+	if tmplData.Subject != nil {
+		n.Payload["_rendered_subject"] = *tmplData.Subject
+	}
 	return nil
 }
 
@@ -114,4 +121,22 @@ func (s *DeliveryService) handleFailure(ctx context.Context, n *domain.Notificat
 	retryAt := time.Now().Add(backoff.Calculate(n.RetryCount))
 	_ = s.repo.UpdateStatus(ctx, n.ID, domain.StatusPending, n.RetryCount+1, &errMsg)
 	return s.repo.ScheduleRetry(ctx, n.ID, retryAt)
+}
+
+func NewDeliveryService(
+	repo domain.NotificationRepository,
+	templateRepo domain.TemplateRepository,
+	limiter domain.RateLimiter,
+	idemp domain.IdempotencyGuard,
+	provider Provider,
+	statusPub StatusPublisher,
+) *DeliveryService {
+	return &DeliveryService{
+		repo:         repo,
+		templateRepo: templateRepo,
+		limiter:      limiter,
+		idemp:        idemp,
+		provider:     provider,
+		statusPub:    statusPub,
+	}
 }

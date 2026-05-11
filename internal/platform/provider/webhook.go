@@ -43,12 +43,22 @@ func (p *WebhookProvider) Send(ctx context.Context, n *domain.Notification) erro
 		telemetry.DeliveryLatency.WithLabelValues(string(n.Channel)).Observe(time.Since(start).Seconds())
 	}()
 
-	// 2. The Circuit Breaker Execution Block
 	result, err := p.breaker.Execute(func() (any, error) {
-		payloadBytes, err := json.Marshal(n.Payload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal payload: %w", err)
+		// Construct the final JSON payload for the external API
+		finalPayload := make(map[string]any)
+
+		if rendered, ok := n.Payload["_rendered_content"].(string); ok {
+			// This is what the external API actually wants to see
+			finalPayload["message"] = rendered
+			if subject, ok := n.Payload["_rendered_subject"].(string); ok {
+				finalPayload["subject"] = subject
+			}
+		} else {
+			// Fallback: If no template was used, send the raw payload
+			finalPayload = n.Payload
 		}
+
+		payloadBytes, err := json.Marshal(finalPayload)
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url, bytes.NewBuffer(payloadBytes))
 		if err != nil {

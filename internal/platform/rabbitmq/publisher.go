@@ -44,7 +44,6 @@ func (p *Publisher) Publish(ctx context.Context, notificationID uuid.UUID, prior
 	}
 
 	headers := make(amqp.Table)
-	// INJECT: OpenTelemetry writes the TraceID and SpanID into the headers map.
 	otel.GetTextMapPropagator().Inject(ctx, amqpTableCarrier(headers))
 
 	publishing := amqp.Publishing{

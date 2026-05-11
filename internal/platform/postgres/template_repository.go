@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"notification-system/internal/domain"
 
 	"github.com/google/uuid"
@@ -33,4 +34,16 @@ func (r *TemplateRepository) GetByName(ctx context.Context, name string) (*domai
 	var t domain.Template
 	err := r.db.QueryRow(ctx, query, name).Scan(&t.ID, &t.Name, &t.Channel, &t.Subject, &t.Body, &t.CreatedAt, &t.UpdatedAt)
 	return &t, err
+}
+
+func (r *TemplateRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	query := `DELETE FROM templates WHERE id = $1`
+	tag, err := r.db.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete template: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("template not found")
+	}
+	return nil
 }

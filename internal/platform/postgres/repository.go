@@ -20,6 +20,22 @@ func NewNotificationRepository(db *pgxpool.Pool) *NotificationRepository {
 	return &NotificationRepository{db: db}
 }
 
+// MustConnect is a helper for main.go to ensure we have a DB or crash early.
+func MustConnect(connStr string) *pgxpool.Pool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		panic(fmt.Sprintf("unable to connect to database: %v", err))
+	}
+
+	if err := pool.Ping(ctx); err != nil {
+		panic(fmt.Sprintf("database ping failed: %v", err))
+	}
+	return pool
+}
+
 // CreateBatch inserts a high-throughput batch of notifications efficiently.
 func (r *NotificationRepository) CreateBatch(ctx context.Context, notifications []*domain.Notification) error {
 	batch := &pgx.Batch{}

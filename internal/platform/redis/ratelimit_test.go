@@ -48,15 +48,16 @@ func TestRateLimiter_TokenBucket_Boundary(t *testing.T) {
 	channel := domain.ChannelSMS
 
 	t.Run("allows exactly 100 requests and blocks the 101st", func(t *testing.T) {
+		recipient := "user-123"
 		// 1. Drain the bucket (simulate 100 quick requests)
 		for i := 0; i < 100; i++ {
-			allowed, err := limiter.Allow(ctx, channel)
+			allowed, err := limiter.Allow(ctx, channel, recipient)
 			require.NoError(t, err)
 			assert.True(t, allowed, "Request %d should be allowed", i+1)
 		}
 
 		// 2. The 101st request MUST be blocked
-		allowed, err := limiter.Allow(ctx, channel)
+		allowed, err := limiter.Allow(ctx, channel, recipient)
 		require.NoError(t, err)
 		assert.False(t, allowed, "The 101st request MUST be rate-limited")
 
@@ -64,7 +65,7 @@ func TestRateLimiter_TokenBucket_Boundary(t *testing.T) {
 		time.Sleep(1100 * time.Millisecond)
 
 		// 4. Request should now be permitted again
-		allowed, err = limiter.Allow(ctx, channel)
+		allowed, err = limiter.Allow(ctx, channel, recipient)
 		require.NoError(t, err)
 		assert.True(t, allowed, "Request should be allowed after bucket refill")
 	})
@@ -79,6 +80,7 @@ func TestRateLimiter_TokenBucket_Concurrency(t *testing.T) {
 	channel := domain.ChannelEmail
 
 	t.Run("prevents race conditions under extreme concurrency", func(t *testing.T) {
+		recipient := "concurrent-user@example.com"
 		var wg sync.WaitGroup
 		var allowedCount int32
 		var blockedCount int32
@@ -91,7 +93,7 @@ func TestRateLimiter_TokenBucket_Concurrency(t *testing.T) {
 		for i := 0; i < workers; i++ {
 			go func() {
 				defer wg.Done()
-				allowed, err := limiter.Allow(ctx, channel)
+				allowed, err := limiter.Allow(ctx, channel, recipient)
 				require.NoError(t, err)
 
 				if allowed {
