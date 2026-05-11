@@ -83,22 +83,25 @@ func (h *NotificationHandler) HandleCreate(c *gin.Context) {
 	// Dual-Write: Persist to Postgres first
 	insertedIDs, err := h.repo.CreateBatch(ctx, []*domain.Notification{notification})
 	if err != nil {
-		slog.ErrorContext(ctx, "failed to insert", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "db error"})
 		return
 	}
+	actualID := insertedIDs[0]
 
-	// If insertedIDs is empty, it means it was a duplicate
-	if len(insertedIDs) > 0 {
-		err := h.publisher.Publish(ctx, notification.ID, notification.Priority)
+	// If the ID from the DB is the same as the one we just made, it's NEW.
+	// If it's different, it's a DUPLICATE.
+	if actualID == notification.ID {
+		err := h.publisher.Publish(ctx, actualID, notification.Priority)
 		if err != nil {
 			slog.WarnContext(ctx, "fast-path publish failed", "id", notification.ID)
 		}
+	} else {
+		slog.InfoContext(ctx, "ignoring duplicate ingress request", "key", req.IdempotencyKey)
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"message":         "notification accepted for processing",
-		"notification_id": id.String(),
+		"notification_id": actualID.String(),
 	})
 }
 

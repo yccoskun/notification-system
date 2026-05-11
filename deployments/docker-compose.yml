@@ -111,6 +111,22 @@ services:
       redis: { condition: service_healthy }
     networks:
       - notification_net
+  sweeper:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+      target: sweeper
+    container_name: notification_sweeper
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      - OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    networks:
+      - notification_net
+    restart: always
 
   # 4. Metrics & Tracing (Restored your originals)
   prometheus:

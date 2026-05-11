@@ -45,7 +45,8 @@ func (r *NotificationRepository) CreateBatch(ctx context.Context, notifications 
 			id, batch_id, recipient, channel, template_id, payload, priority, 
 			status, idempotency_key, send_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (idempotency_key) DO NOTHING
+		ON CONFLICT (idempotency_key) 
+		DO UPDATE SET updated_at = notifications.updated_at 
 		RETURNING id`
 
 	for _, n := range notifications {
@@ -61,11 +62,7 @@ func (r *NotificationRepository) CreateBatch(ctx context.Context, notifications 
 		var id uuid.UUID
 		err := results.QueryRow().Scan(&id)
 		if err != nil {
-			if err == pgx.ErrNoRows {
-				// This row was a duplicate, ignore it
-				continue
-			}
-			return nil, fmt.Errorf("failed to insert batch row %d: %w", i, err)
+			return nil, fmt.Errorf("failed to process batch row %d: %w", i, err)
 		}
 		insertedIDs = append(insertedIDs, id)
 	}
