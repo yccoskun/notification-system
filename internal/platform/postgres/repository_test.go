@@ -308,12 +308,11 @@ func TestNotificationRepository_Idempotency(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, inserted1, 1)
 
-	// Second insert (duplicate key)
+	// Second insert (duplicate idempotency key): upsert returns the persisted row id.
 	inserted2, err := repo.CreateBatch(ctx, []*domain.Notification{n2})
 	require.NoError(t, err)
-
-	// PROOF: inserted2 should be empty because of ON CONFLICT DO NOTHING
-	assert.Empty(t, inserted2)
+	require.Len(t, inserted2, 1)
+	assert.Equal(t, inserted1[0], inserted2[0], "duplicate submit must return the original notification id")
 }
 
 func stringPtr(s string) *string { return &s }
