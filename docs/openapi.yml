@@ -188,7 +188,7 @@ components:
           type: string
         status:
           type: string
-          enum: [PENDING, SENT, FAILED]
+          enum: [PENDING, SENT, FAILED, CANCELLED]
         retry_count:
           type: integer
         last_error:

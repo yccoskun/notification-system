@@ -1,5 +1,5 @@
 -- 1. Create Enums
-CREATE TYPE notification_status AS ENUM ('PENDING', 'PROCESSING', 'SENT', 'FAILED', 'CANCELLED');
+CREATE TYPE notification_status AS ENUM ('PENDING', 'SENT', 'FAILED', 'CANCELLED');
 CREATE TYPE channel_type AS ENUM ('SMS', 'EMAIL', 'PUSH');
 
 -- 2. Templates Table

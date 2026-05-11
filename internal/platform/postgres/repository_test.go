@@ -195,6 +195,38 @@ func TestNotificationRepository_UpdateStatus(t *testing.T) {
 	assert.Equal(t, errMsg, *fetched.LastError)
 }
 
+func TestNotificationRepository_UpdateStatusCancelled(t *testing.T) {
+	pool, teardown := setupTestDB(t)
+	defer teardown()
+
+	repo := mypostgres.NewNotificationRepository(pool)
+	ctx := context.Background()
+
+	id := uuid.New()
+	n := &domain.Notification{
+		ID:             id,
+		Recipient:      "+15550009999",
+		Channel:        domain.ChannelSMS,
+		Payload:        map[string]any{},
+		Priority:       1,
+		Status:         domain.StatusPending,
+		IdempotencyKey: stringPtr("cancel-repo-test"),
+		SendAt:         time.Now(),
+	}
+
+	_, err := repo.CreateBatch(ctx, []*domain.Notification{n})
+	require.NoError(t, err)
+
+	reason := "cancelled by user via API"
+	err = repo.UpdateStatus(ctx, id, domain.StatusCancelled, 0, &reason)
+	require.NoError(t, err)
+
+	fetched, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusCancelled, fetched.Status)
+	assert.Equal(t, reason, *fetched.LastError)
+}
+
 func TestNotificationRepository_ScheduleRetry(t *testing.T) {
 	pool, teardown := setupTestDB(t)
 	defer teardown()

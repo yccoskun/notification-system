@@ -10,7 +10,6 @@ type NotificationStatus string
 
 const (
 	StatusPending    NotificationStatus = "PENDING"
-	StatusProcessing NotificationStatus = "PROCESSING"
 	StatusSent       NotificationStatus = "SENT"
 	StatusFailed     NotificationStatus = "FAILED"
 	StatusCancelled  NotificationStatus = "CANCELLED"

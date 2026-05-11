@@ -236,7 +236,7 @@ func (h *NotificationHandler) HandleCancel(c *gin.Context) {
 	}
 
 	cancelReason := "cancelled by user via API"
-	err = h.repo.UpdateStatus(ctx, id, domain.StatusFailed, notification.RetryCount, &cancelReason)
+	err = h.repo.UpdateStatus(ctx, id, domain.StatusCancelled, notification.RetryCount, &cancelReason)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process cancellation"})
 		return
