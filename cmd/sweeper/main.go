@@ -19,12 +19,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	shutdownTracer, err := telemetry.InitTracer(ctx, "sweeper-service", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	shutdownTracer, err := telemetry.InitTracer(ctx, "api-service", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	if err != nil {
 		slog.Error("failed to initialize tracer", "error", err)
 	} else {
-		defer shutdownTracer(context.Background())
+		defer func() {
+			if err := shutdownTracer(context.Background()); err != nil {
+				slog.Error("failed to shutdown tracer", "error", err)
+			}
+		}()
 	}
+
 	dbPool := postgres.MustConnect(os.Getenv("DATABASE_URL"))
 	_, ch, err := rabbitmq.NewChannel(os.Getenv("RABBITMQ_URL"))
 	if err != nil {

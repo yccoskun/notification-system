@@ -102,7 +102,9 @@ services:
       - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       - REDIS_URL=redis:6379
       - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
-      - PROVIDER_URL=${PROVIDER_URL}
+      - EMAIL_PROVIDER_URL=${EMAIL_PROVIDER_URL}
+      - SMS_PROVIDER_URL=${SMS_PROVIDER_URL}
+      - PUSH_PROVIDER_URL=${PUSH_PROVIDER_URL}
       - OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317
     depends_on:
       rabbitmq: { condition: service_healthy }

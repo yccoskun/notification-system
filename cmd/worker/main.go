@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"notification-system/internal/domain"
 	"notification-system/internal/platform/postgres"
 	"notification-system/internal/platform/provider"
 	"notification-system/internal/platform/rabbitmq"
@@ -23,11 +24,16 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	shutdownTracer, err := telemetry.InitTracer(ctx, "worker-service", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+
+	shutdownTracer, err := telemetry.InitTracer(ctx, "api-service", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	if err != nil {
 		slog.Error("failed to initialize tracer", "error", err)
 	} else {
-		defer shutdownTracer(context.Background())
+		defer func() {
+			if err := shutdownTracer(context.Background()); err != nil {
+				slog.Error("failed to shutdown tracer", "error", err)
+			}
+		}()
 	}
 	// 1. Platform Connections
 	dbPool := postgres.MustConnect(os.Getenv("DATABASE_URL"))
@@ -39,11 +45,19 @@ func main() {
 	limiter := redisPlatform.NewRateLimiter(rdb)
 	idemp := redisPlatform.NewIdempotencyGuard(rdb)
 	statusPub := redisPlatform.NewPubSub(rdb)
-	webhookProvider := provider.NewWebhookProvider(os.Getenv("PROVIDER_URL"))
 
-	// 3. Orchestrator Service
+	emailURL := os.Getenv("EMAIL_PROVIDER_URL")
+	smsURL := os.Getenv("SMS_PROVIDER_URL")
+	pushURL := os.Getenv("PUSH_PROVIDER_URL")
+
+	providers := map[domain.ChannelType]service.Provider{
+		domain.ChannelEmail: provider.NewWebhookProvider(emailURL),
+		domain.ChannelSMS:   provider.NewWebhookProvider(smsURL),
+		domain.ChannelPush:  provider.NewWebhookProvider(pushURL),
+	}
+
 	deliverySvc := service.NewDeliveryService(
-		repo, tmplRepo, limiter, idemp, webhookProvider, statusPub,
+		repo, tmplRepo, limiter, idemp, providers, statusPub,
 	)
 
 	go func() {
@@ -65,7 +79,14 @@ func main() {
 	consumer := rabbitmq.NewConsumer(ch)
 
 	// Start consuming and passing tasks to the orchestrator
-	go consumer.Start(ctx, 10, deliverySvc.HandleDelivery)
+	go func() {
+		if err := consumer.Start(ctx, 10, deliverySvc.HandleDelivery); err != nil {
+			slog.Error("consumer crashed", "error", err)
+		}
+	}()
 
 	<-ctx.Done()
+	if err := shutdownTracer(context.Background()); err != nil {
+		slog.Error("failed to shutdown tracer", "error", err)
+	}
 }

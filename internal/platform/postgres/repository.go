@@ -37,7 +37,7 @@ func MustConnect(connStr string) *pgxpool.Pool {
 }
 
 // CreateBatch inserts a high-throughput batch of notifications efficiently.
-func (r *NotificationRepository) CreateBatch(ctx context.Context, notifications []*domain.Notification) error {
+func (r *NotificationRepository) CreateBatch(ctx context.Context, notifications []*domain.Notification) ([]uuid.UUID, error) {
 	batch := &pgx.Batch{}
 
 	query := `
@@ -45,7 +45,8 @@ func (r *NotificationRepository) CreateBatch(ctx context.Context, notifications 
 			id, batch_id, recipient, channel, template_id, payload, priority, 
 			status, idempotency_key, send_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (idempotency_key) DO NOTHING`
+		ON CONFLICT (idempotency_key) DO NOTHING
+		RETURNING id`
 
 	for _, n := range notifications {
 		batch.Queue(query, n.ID, n.BatchID, n.Recipient, n.Channel, n.TemplateID, n.Payload,
@@ -55,13 +56,20 @@ func (r *NotificationRepository) CreateBatch(ctx context.Context, notifications 
 	results := r.db.SendBatch(ctx, batch)
 	defer results.Close()
 
+	insertedIDs := make([]uuid.UUID, 0, len(notifications))
 	for i := 0; i < len(notifications); i++ {
-		_, err := results.Exec()
+		var id uuid.UUID
+		err := results.QueryRow().Scan(&id)
 		if err != nil {
-			return fmt.Errorf("failed to insert batch row %d: %w", i, err)
+			if err == pgx.ErrNoRows {
+				// This row was a duplicate, ignore it
+				continue
+			}
+			return nil, fmt.Errorf("failed to insert batch row %d: %w", i, err)
 		}
+		insertedIDs = append(insertedIDs, id)
 	}
-	return nil
+	return insertedIDs, nil
 }
 
 // GetByID fetches a single notification for status checks.

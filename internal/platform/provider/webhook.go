@@ -60,6 +60,10 @@ func (p *WebhookProvider) Send(ctx context.Context, n *domain.Notification) erro
 
 		payloadBytes, err := json.Marshal(finalPayload)
 
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal payload: %w", err)
+		}
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url, bytes.NewBuffer(payloadBytes))
 		if err != nil {
 			return nil, err

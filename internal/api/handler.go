@@ -81,16 +81,19 @@ func (h *NotificationHandler) HandleCreate(c *gin.Context) {
 	telemetry.NotificationsReceived.WithLabelValues(string(notification.Channel), "api").Inc()
 
 	// Dual-Write: Persist to Postgres first
-	if err := h.repo.CreateBatch(ctx, []*domain.Notification{notification}); err != nil {
-		slog.ErrorContext(ctx, "failed to insert single notification", "error", err)
+	insertedIDs, err := h.repo.CreateBatch(ctx, []*domain.Notification{notification})
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to insert", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 
-	// Fast-Path: Publish to RabbitMQ
-	err := h.publisher.Publish(ctx, notification.ID, notification.Priority)
-	if err != nil {
-		slog.WarnContext(ctx, "fast-path publish failed, falling back to sweeper", "id", notification.ID, "error", err)
+	// If insertedIDs is empty, it means it was a duplicate
+	if len(insertedIDs) > 0 {
+		err := h.publisher.Publish(ctx, notification.ID, notification.Priority)
+		if err != nil {
+			slog.WarnContext(ctx, "fast-path publish failed", "id", notification.ID)
+		}
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -132,17 +135,25 @@ func (h *NotificationHandler) HandleBatchSubmit(c *gin.Context) {
 	}
 
 	// Dual-Write: Persist to Postgres
-	if err := h.repo.CreateBatch(ctx, domainNotifications); err != nil {
-		slog.ErrorContext(ctx, "failed to insert notification batch", "error", err)
+	insertedIDs, err := h.repo.CreateBatch(ctx, domainNotifications)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
 	}
 
+	// Create a map for fast lookup of what was actually inserted
+	insertedMap := make(map[uuid.UUID]bool)
+	for _, id := range insertedIDs {
+		insertedMap[id] = true
+	}
+
 	// Fast-Path: Publish to RabbitMQ
 	for _, n := range domainNotifications {
-		err := h.publisher.Publish(ctx, n.ID, n.Priority)
-		if err != nil {
-			slog.WarnContext(ctx, "fast-path publish failed, falling back to sweeper", "id", n.ID, "error", err)
+		if insertedMap[n.ID] {
+			err := h.publisher.Publish(ctx, n.ID, n.Priority)
+			if err != nil {
+				slog.WarnContext(ctx, "fast-path publish failed, falling back to sweeper", "id", n.ID, "error", err)
+			}
 		}
 	}
 

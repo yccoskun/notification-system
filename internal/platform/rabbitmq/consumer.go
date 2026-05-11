@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -71,19 +72,32 @@ func (c *Consumer) processMessage(msg amqp.Delivery, handler HandlerFunc) {
 	if err := json.Unmarshal(msg.Body, &payload); err != nil {
 		slog.ErrorContext(ctx, "poison pill detected, dropping message", "error", err)
 		// Nack without requeueing drops it completely (or routes to a DLQ if configured)
-		msg.Nack(false, false)
+		if err := msg.Nack(false, false); err != nil {
+			slog.Error("failed to nack poison pill", "error", err)
+		}
 		return
 	}
 
 	// Hand over to the business logic orchestrator
 	err := handler(ctx, payload.ID)
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			slog.WarnContext(ctx, "dropping orphan message: notification not in DB", "id", payload.ID)
+			if err := msg.Ack(false); err != nil {
+				slog.Error("failed to ack message", "error", err)
+			}
+			return
+		}
 		slog.ErrorContext(ctx, "handler failed, message requeued", "error", err, "id", payload.ID)
 		// If our rate-limiter blocked it, or the API crashed, put it back in the queue
-		msg.Nack(false, true)
+		if err := msg.Nack(false, true); err != nil {
+			slog.Error("failed to nack/requeue", "error", err)
+		}
 		return
 	}
 
 	// Success! Safely remove from RabbitMQ.
-	msg.Ack(false)
+	if err := msg.Ack(false); err != nil {
+		slog.Error("failed to ack message", "error", err)
+	}
 }

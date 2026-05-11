@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"text/template"
 	"time"
 
@@ -28,7 +29,7 @@ type DeliveryService struct {
 	templateRepo domain.TemplateRepository
 	limiter      domain.RateLimiter
 	idemp        domain.IdempotencyGuard
-	provider     Provider
+	providers    map[domain.ChannelType]Provider
 	statusPub    StatusPublisher
 }
 
@@ -47,7 +48,16 @@ func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) erro
 	if err != nil || !locked {
 		return fmt.Errorf("could not acquire idempotency lock")
 	}
-	defer s.idemp.Release(ctx, id.String())
+	defer func() {
+		if err := s.idemp.Release(ctx, id.String()); err != nil {
+			slog.Warn("failed to release idempotency lock", "id", id, "error", err)
+		}
+	}()
+
+	p, ok := s.providers[n.Channel]
+	if !ok {
+		return fmt.Errorf("no provider configured for channel: %s", n.Channel)
+	}
 
 	// 2. Rate Limiting (Fixed Signature)
 	allowed, err := s.limiter.Allow(ctx, n.Channel, n.Recipient)
@@ -65,7 +75,7 @@ func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) erro
 
 	// 4. Provider Call & Latency Tracking
 	start := time.Now()
-	err = s.provider.Send(ctx, n)
+	err = p.Send(ctx, n)
 	duration := time.Since(start).Seconds()
 
 	// FIXED: Observe requires label values for a HistogramVec
@@ -125,18 +135,18 @@ func (s *DeliveryService) handleFailure(ctx context.Context, n *domain.Notificat
 
 func NewDeliveryService(
 	repo domain.NotificationRepository,
-	templateRepo domain.TemplateRepository,
+	tmplRepo domain.TemplateRepository,
 	limiter domain.RateLimiter,
 	idemp domain.IdempotencyGuard,
-	provider Provider,
+	providers map[domain.ChannelType]Provider, // Updated arg
 	statusPub StatusPublisher,
 ) *DeliveryService {
 	return &DeliveryService{
 		repo:         repo,
-		templateRepo: templateRepo,
+		templateRepo: tmplRepo,
 		limiter:      limiter,
 		idemp:        idemp,
-		provider:     provider,
+		providers:    providers,
 		statusPub:    statusPub,
 	}
 }

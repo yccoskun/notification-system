@@ -26,9 +26,12 @@ func main() {
 	shutdownTracer, err := telemetry.InitTracer(ctx, "api-service", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	if err != nil {
 		slog.Error("failed to initialize tracer", "error", err)
-		// We don't panic here because the app can still function without traces
 	} else {
-		defer shutdownTracer(context.Background())
+		defer func() {
+			if err := shutdownTracer(context.Background()); err != nil {
+				slog.Error("failed to shutdown tracer", "error", err)
+			}
+		}()
 	}
 
 	// DB Migrations
@@ -83,5 +86,12 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	srv.Shutdown(shutdownCtx)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("server forced to shutdown", "error", err)
+	}
+	if shutdownTracer != nil {
+		if err := shutdownTracer(context.Background()); err != nil {
+			slog.Error("failed to shutdown tracer", "error", err)
+		}
+	}
 }

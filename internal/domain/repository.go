@@ -8,7 +8,7 @@ import (
 )
 
 type NotificationRepository interface {
-	CreateBatch(ctx context.Context, notifications []*Notification) error
+	CreateBatch(ctx context.Context, notifications []*Notification) ([]uuid.UUID, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*Notification, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status NotificationStatus, retryCount int, lastErr *string) error
 	GetPendingForDelivery(ctx context.Context, batchSize int) ([]*Notification, error)
