@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-
-	"notification-system/internal/domain"
 )
 
 // tokenBucketLua is evaluated atomically by Redis.
@@ -62,8 +60,7 @@ func NewRateLimiter(client *redis.Client) *RateLimiter {
 }
 
 // Allow executes the Lua script to safely check and decrement the token bucket.
-func (rl *RateLimiter) Allow(ctx context.Context, channel domain.ChannelType, recipient string) (bool, error) {
-	key := fmt.Sprintf("ratelimit:%s:%s", channel, recipient)
+func (rl *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
 	now := time.Now().Unix()
 
 	// Run evaluates the cached SHA of the script, saving massive network bandwidth.

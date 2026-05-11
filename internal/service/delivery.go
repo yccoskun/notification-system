@@ -46,7 +46,9 @@ func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) erro
 	// 1. Idempotency
 	locked, err := s.idemp.Acquire(ctx, id.String(), 10*time.Minute)
 	if err != nil || !locked {
-		return fmt.Errorf("could not acquire idempotency lock")
+		slog.ErrorContext(ctx, "could not acquire idempotency lock, redis down: moving notification to hibernation", "error", err, "id", id)
+		_ = s.repo.ScheduleRetry(ctx, id, time.Now().Add(5*time.Minute))
+		return nil
 	}
 	defer func() {
 		if err := s.idemp.Release(ctx, id.String()); err != nil {
@@ -59,11 +61,17 @@ func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) erro
 		return fmt.Errorf("no provider configured for channel: %s", n.Channel)
 	}
 
-	// 2. Rate Limiting (Fixed Signature)
-	allowed, err := s.limiter.Allow(ctx, n.Channel, n.Recipient)
-	if err != nil || !allowed {
-		telemetry.RateLimitHits.WithLabelValues(string(n.Channel)).Inc()
-		return s.repo.ScheduleRetry(ctx, id, time.Now().Add(time.Minute))
+	// 2. Rate Limiting
+	allowed, err := s.limiter.Allow(ctx, "ratelimit:"+string(n.Channel)+":"+n.Recipient)
+	if err != nil {
+		// REDIS IS DOWN: Don't crash, just log and back off
+		slog.ErrorContext(ctx, "rate limiter unreachable, backing off", "error", err, "id", id)
+		return s.repo.ScheduleRetry(ctx, id, time.Now().Add(1*time.Minute))
+	}
+
+	if !allowed {
+		slog.InfoContext(ctx, "rate limit hit: delaying notification", "id", id)
+		return s.repo.ScheduleRetry(ctx, id, time.Now().Add(1*time.Minute))
 	}
 
 	// 3. Rendering
