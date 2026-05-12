@@ -3,12 +3,14 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
+	"notification-system/docs"
 	"notification-system/internal/platform/telemetry"
 )
 
@@ -17,8 +19,8 @@ import (
 // so they don't pollute latency percentiles.
 func prometheusMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		path := c.FullPath()
-		if path == "/health" || path == "/metrics" || path == "" {
+		reqPath := c.Request.URL.Path
+		if reqPath == "/health" || reqPath == "/metrics" || strings.HasPrefix(reqPath, "/docs") {
 			c.Next()
 			return
 		}
@@ -29,9 +31,13 @@ func prometheusMiddleware() gin.HandlerFunc {
 		c.Next()
 
 		telemetry.HTTPRequestsInFlight.Dec()
+		route := c.FullPath()
+		if route == "" {
+			route = reqPath
+		}
 		telemetry.HTTPRequestDuration.WithLabelValues(
 			c.Request.Method,
-			path,
+			route,
 			strconv.Itoa(c.Writer.Status()),
 		).Observe(time.Since(start).Seconds())
 	}
@@ -55,6 +61,8 @@ func NewRouter(serviceName string, notifHandler *NotificationHandler, wsHub *WSH
 		c.JSON(http.StatusOK, gin.H{"status": "UP"})
 	})
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	docs.RegisterSwaggerUI(r)
 
 	// Domain Endpoints
 	v1 := r.Group("/api/v1")

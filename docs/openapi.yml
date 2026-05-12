@@ -4,8 +4,8 @@ info:
   description: Core ingress and management API for the distributed notification engine.
   version: 1.0.0
 servers:
-  - url: http://localhost:8080/api/v1
-    description: Local Development Server
+  - url: /api/v1
+    description: Relative to this server (works with Swagger Try it out, Docker port mapping, and reverse proxies)
 
 paths:
   /ws:
