@@ -20,11 +20,11 @@ const (
 	// MaxPayloadJSONBytes caps JSONB size and outbound webhook bodies.
 	MaxPayloadJSONBytes = 512 << 10 // 512 KiB
 
-	maxSMSBodyRunes       = 1600
-	maxEmailSubjectRunes  = 255
-	maxEmailBodyRunes     = 100_000
-	maxPushTitleRunes     = 128
-	maxPushBodyRunes      = 4096
+	maxSMSBodyRunes        = 1600
+	maxEmailSubjectRunes   = 255
+	maxEmailBodyRunes      = 100_000
+	maxPushTitleRunes      = 128
+	maxPushBodyRunes       = 4096
 	maxTemplateStringRunes = 8192
 )
 

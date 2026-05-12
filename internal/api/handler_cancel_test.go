@@ -93,9 +93,9 @@ func (r *cancelStubRepo) ScheduleRetry(ctx context.Context, id uuid.UUID, sendAt
 }
 
 type captureStatusPublisher struct {
-	mu       sync.Mutex
-	publish  []string
-	detail   []string
+	mu      sync.Mutex
+	publish []string
+	detail  []string
 }
 
 func (c *captureStatusPublisher) Publish(ctx context.Context, id, status string) error {

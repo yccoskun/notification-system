@@ -160,7 +160,7 @@ func (h *WSHub) HandleWebSocket(c *gin.Context) {
 	}
 
 	upgrader := websocket.Upgrader{
-		CheckOrigin: websocketCheckOrigin,
+		CheckOrigin:     websocketCheckOrigin,
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 	}

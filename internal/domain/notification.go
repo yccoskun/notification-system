@@ -9,10 +9,10 @@ import (
 type NotificationStatus string
 
 const (
-	StatusPending    NotificationStatus = "PENDING"
-	StatusSent       NotificationStatus = "SENT"
-	StatusFailed     NotificationStatus = "FAILED"
-	StatusCancelled  NotificationStatus = "CANCELLED"
+	StatusPending   NotificationStatus = "PENDING"
+	StatusSent      NotificationStatus = "SENT"
+	StatusFailed    NotificationStatus = "FAILED"
+	StatusCancelled NotificationStatus = "CANCELLED"
 )
 
 type ChannelType string

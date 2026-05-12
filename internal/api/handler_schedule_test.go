@@ -64,7 +64,9 @@ func (r *scheduleRepo) UpdateStatus(context.Context, uuid.UUID, domain.Notificat
 func (r *scheduleRepo) GetPendingForDelivery(context.Context, int) ([]*domain.Notification, error) {
 	panic("unimplemented")
 }
-func (r *scheduleRepo) ScheduleRetry(context.Context, uuid.UUID, time.Time) error { panic("unimplemented") }
+func (r *scheduleRepo) ScheduleRetry(context.Context, uuid.UUID, time.Time) error {
+	panic("unimplemented")
+}
 
 func TestHandleCreate_futureSendAtSkipsBrokerPublish(t *testing.T) {
 	gin.SetMode(gin.TestMode)

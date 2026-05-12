@@ -26,9 +26,9 @@ type StatusBroadcaster interface {
 }
 
 type NotificationHandler struct {
-	repo       domain.NotificationRepository
-	publisher  BrokerPublisher
-	statusPub  StatusBroadcaster
+	repo      domain.NotificationRepository
+	publisher BrokerPublisher
+	statusPub StatusBroadcaster
 }
 
 func NewNotificationHandler(repo domain.NotificationRepository, publisher BrokerPublisher, statusPub StatusBroadcaster) *NotificationHandler {
@@ -44,7 +44,7 @@ type CreateRequest struct {
 	TemplateID     *uuid.UUID         `json:"template_id"`
 	Priority       int                `json:"priority" binding:"gte=0,lte=10"`
 	Payload        map[string]any     `json:"payload"`
-	SendAt *time.Time `json:"send_at"`
+	SendAt         *time.Time         `json:"send_at"`
 }
 
 // BatchNotificationItem is one row in a batch submit request.
