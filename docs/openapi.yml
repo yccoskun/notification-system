@@ -9,6 +9,62 @@ servers:
 
 paths:
   /notifications:
+    get:
+      summary: List notifications with optional filters and pagination
+      operationId: listNotifications
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [PENDING, SENT, FAILED, CANCELLED]
+        - name: channel
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [SMS, EMAIL, PUSH]
+        - name: created_from
+          in: query
+          required: false
+          description: Inclusive lower bound on created_at (RFC3339 or RFC3339Nano)
+          schema:
+            type: string
+            format: date-time
+        - name: created_to
+          in: query
+          required: false
+          description: Inclusive upper bound on created_at (RFC3339 or RFC3339Nano)
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          description: Page size (default 50, max 100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          description: Number of rows to skip for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Paginated list of notifications
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationListResponse'
+        '400':
+          description: Invalid query parameters
     post:
       summary: Submit a single notification for async processing
       operationId: createNotification
@@ -200,3 +256,23 @@ components:
         created_at:
           type: string
           format: date-time
+
+    NotificationListResponse:
+      type: object
+      required:
+        - notifications
+        - total
+        - limit
+        - offset
+      properties:
+        notifications:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+        offset:
+          type: integer

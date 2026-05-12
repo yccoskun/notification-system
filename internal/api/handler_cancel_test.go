@@ -80,6 +80,10 @@ func (r *cancelStubRepo) GetByBatchID(ctx context.Context, batchID uuid.UUID) ([
 	return nil, nil
 }
 
+func (r *cancelStubRepo) List(ctx context.Context, filter domain.NotificationListFilter, limit, offset int) ([]*domain.Notification, int64, error) {
+	return nil, 0, fmt.Errorf("not implemented")
+}
+
 func (r *cancelStubRepo) GetPendingForDelivery(ctx context.Context, batchSize int) ([]*domain.Notification, error) {
 	return nil, nil
 }

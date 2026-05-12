@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -120,6 +121,73 @@ func (r *NotificationRepository) GetByBatchID(ctx context.Context, batchID uuid.
 		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 	return out, nil
+}
+
+func buildListWhere(filter domain.NotificationListFilter) (where string, args []any) {
+	var b strings.Builder
+	args = []any{}
+	b.WriteString("1=1")
+	if filter.Status != nil {
+		fmt.Fprintf(&b, " AND status::text = $%d", len(args)+1)
+		args = append(args, string(*filter.Status))
+	}
+	if filter.Channel != nil {
+		fmt.Fprintf(&b, " AND channel::text = $%d", len(args)+1)
+		args = append(args, string(*filter.Channel))
+	}
+	if filter.CreatedFrom != nil {
+		fmt.Fprintf(&b, " AND created_at >= $%d", len(args)+1)
+		args = append(args, *filter.CreatedFrom)
+	}
+	if filter.CreatedTo != nil {
+		fmt.Fprintf(&b, " AND created_at <= $%d", len(args)+1)
+		args = append(args, *filter.CreatedTo)
+	}
+	return b.String(), args
+}
+
+// List returns notifications matching optional filters, ordered by newest first, with total row count for pagination.
+func (r *NotificationRepository) List(ctx context.Context, filter domain.NotificationListFilter, limit, offset int) ([]*domain.Notification, int64, error) {
+	whereSQL, args := buildListWhere(filter)
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM notifications WHERE %s", whereSQL)
+	var total int64
+	if err := r.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count notifications: %w", err)
+	}
+
+	listArgs := append(append([]any{}, args...), limit, offset)
+	limPos := len(args) + 1
+	offPos := len(args) + 2
+	listQuery := fmt.Sprintf(`
+		SELECT id, batch_id, recipient, channel, template_id, payload, priority,
+		       status, idempotency_key, retry_count, last_error, send_at, created_at, updated_at
+		FROM notifications WHERE %s
+		ORDER BY created_at DESC, id DESC
+		LIMIT $%d OFFSET $%d`, whereSQL, limPos, offPos)
+
+	rows, err := r.db.Query(ctx, listQuery, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list notifications: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]*domain.Notification, 0)
+	for rows.Next() {
+		var n domain.Notification
+		err := rows.Scan(
+			&n.ID, &n.BatchID, &n.Recipient, &n.Channel, &n.TemplateID, &n.Payload, &n.Priority,
+			&n.Status, &n.IdempotencyKey, &n.RetryCount, &n.LastError, &n.SendAt, &n.CreatedAt, &n.UpdatedAt,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan notification: %w", err)
+		}
+		out = append(out, &n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("rows iteration error: %w", err)
+	}
+	return out, total, nil
 }
 
 // UpdateStatus records the outcome of a delivery attempt.

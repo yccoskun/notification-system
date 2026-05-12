@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -51,6 +52,105 @@ type BatchSubmitRequest struct {
 }
 
 // --- Route Handlers ---
+
+const (
+	listDefaultLimit = 50
+	listMaxLimit     = 100
+)
+
+// HandleList returns notifications with optional filters (status, channel, created_at range) and offset pagination.
+func (h *NotificationHandler) HandleList(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var filter domain.NotificationListFilter
+
+	if s := c.Query("status"); s != "" {
+		st := domain.NotificationStatus(s)
+		switch st {
+		case domain.StatusPending, domain.StatusSent, domain.StatusFailed, domain.StatusCancelled:
+			filter.Status = &st
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status", "details": "must be one of PENDING, SENT, FAILED, CANCELLED"})
+			return
+		}
+	}
+
+	if ch := c.Query("channel"); ch != "" {
+		ct := domain.ChannelType(ch)
+		switch ct {
+		case domain.ChannelSMS, domain.ChannelEmail, domain.ChannelPush:
+			filter.Channel = &ct
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel", "details": "must be one of SMS, EMAIL, PUSH"})
+			return
+		}
+	}
+
+	parseTimeParam := func(name, raw string) (time.Time, error) {
+		if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+			return t, nil
+		}
+		return time.Parse(time.RFC3339, raw)
+	}
+
+	if raw := c.Query("created_from"); raw != "" {
+		t, err := parseTimeParam("created_from", raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid created_from", "details": "use RFC3339 or RFC3339Nano"})
+			return
+		}
+		filter.CreatedFrom = &t
+	}
+	if raw := c.Query("created_to"); raw != "" {
+		t, err := parseTimeParam("created_to", raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid created_to", "details": "use RFC3339 or RFC3339Nano"})
+			return
+		}
+		filter.CreatedTo = &t
+	}
+
+	if filter.CreatedFrom != nil && filter.CreatedTo != nil && filter.CreatedFrom.After(*filter.CreatedTo) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date range", "details": "created_from must be before or equal to created_to"})
+		return
+	}
+
+	limit := listDefaultLimit
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit", "details": "must be a positive integer"})
+			return
+		}
+		if n > listMaxLimit {
+			n = listMaxLimit
+		}
+		limit = n
+	}
+
+	offset := 0
+	if raw := c.Query("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset", "details": "must be a non-negative integer"})
+			return
+		}
+		offset = n
+	}
+
+	items, total, err := h.repo.List(ctx, filter, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"notifications": items,
+		"total":         total,
+		"limit":         limit,
+		"offset":        offset,
+	})
+}
 
 // HandleCreate processes a single notification request.
 func (h *NotificationHandler) HandleCreate(c *gin.Context) {
@@ -204,8 +304,8 @@ func (h *NotificationHandler) HandleGetBatchStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"batch_id":        batchID.String(),
-		"count":           len(notifications),
+		"batch_id":      batchID.String(),
+		"count":         len(notifications),
 		"notifications": notifications,
 	})
 }

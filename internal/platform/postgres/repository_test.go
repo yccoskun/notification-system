@@ -315,4 +315,70 @@ func TestNotificationRepository_Idempotency(t *testing.T) {
 	assert.Equal(t, inserted1[0], inserted2[0], "duplicate submit must return the original notification id")
 }
 
+func TestNotificationRepository_List_filtersAndPagination(t *testing.T) {
+	pool, teardown := setupTestDB(t)
+	defer teardown()
+
+	repo := mypostgres.NewNotificationRepository(pool)
+	ctx := context.Background()
+	now := time.Now().Round(time.Microsecond)
+
+	n1 := &domain.Notification{
+		ID: uuid.New(), Recipient: "a", Channel: domain.ChannelEmail, Payload: map[string]any{},
+		Priority: 5, Status: domain.StatusPending, IdempotencyKey: stringPtr("list-a"), SendAt: now,
+	}
+	n2 := &domain.Notification{
+		ID: uuid.New(), Recipient: "b", Channel: domain.ChannelSMS, Payload: map[string]any{},
+		Priority: 5, Status: domain.StatusPending, IdempotencyKey: stringPtr("list-b"), SendAt: now,
+	}
+	n3 := &domain.Notification{
+		ID: uuid.New(), Recipient: "c", Channel: domain.ChannelEmail, Payload: map[string]any{},
+		Priority: 5, Status: domain.StatusPending, IdempotencyKey: stringPtr("list-c"), SendAt: now,
+	}
+	_, err := repo.CreateBatch(ctx, []*domain.Notification{n1, n2, n3})
+	require.NoError(t, err)
+
+	t1 := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	t2 := time.Date(2024, 6, 2, 12, 0, 0, 0, time.UTC)
+	t3 := time.Date(2024, 6, 3, 12, 0, 0, 0, time.UTC)
+	_, err = pool.Exec(ctx, `UPDATE notifications SET created_at = $1 WHERE id = $2`, t1, n1.ID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE notifications SET created_at = $1 WHERE id = $2`, t2, n2.ID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE notifications SET created_at = $1 WHERE id = $2`, t3, n3.ID)
+	require.NoError(t, err)
+
+	err = repo.UpdateStatus(ctx, n3.ID, domain.StatusSent, 0, nil)
+	require.NoError(t, err)
+
+	st := domain.StatusSent
+	list, total, err := repo.List(ctx, domain.NotificationListFilter{Status: &st}, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, list, 1)
+	assert.Equal(t, n3.ID, list[0].ID)
+
+	ch := domain.ChannelSMS
+	list, total, err = repo.List(ctx, domain.NotificationListFilter{Channel: &ch}, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, list, 1)
+	assert.Equal(t, n2.ID, list[0].ID)
+
+	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2024, 6, 2, 23, 59, 59, 0, time.UTC)
+	list, total, err = repo.List(ctx, domain.NotificationListFilter{CreatedFrom: &from, CreatedTo: &to}, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), total)
+	require.Len(t, list, 2)
+	assert.Equal(t, n2.ID, list[0].ID, "newer created_at first")
+	assert.Equal(t, n1.ID, list[1].ID)
+
+	list, total, err = repo.List(ctx, domain.NotificationListFilter{}, 1, 1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), total)
+	require.Len(t, list, 1)
+	assert.Equal(t, n2.ID, list[0].ID, "offset 1 with limit 1 returns middle row by created_at desc")
+}
+
 func stringPtr(s string) *string { return &s }

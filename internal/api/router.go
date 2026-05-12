@@ -29,6 +29,7 @@ func NewRouter(serviceName string, notifHandler *NotificationHandler, wsHub *WSH
 	v1 := r.Group("/api/v1")
 	{
 		v1.POST("/notifications", notifHandler.HandleCreate)
+		v1.GET("/notifications", notifHandler.HandleList)
 		v1.POST("/notifications/batch", notifHandler.HandleBatchSubmit)
 		v1.GET("/notifications/batch/:batch_id", notifHandler.HandleGetBatchStatus)
 		v1.GET("/notifications/:id", notifHandler.HandleGetStatus)
