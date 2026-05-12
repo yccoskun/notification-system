@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"notification-system/internal/domain"
@@ -12,6 +13,9 @@ import (
 // Limits aligned with PostgreSQL schema (VARCHAR(255)) and practical provider caps.
 const (
 	maxDBVarchar = 255
+
+	// MaxScheduleHorizon caps how far in the future send_at may be set.
+	MaxScheduleHorizon = 366 * 24 * time.Hour
 
 	// MaxPayloadJSONBytes caps JSONB size and outbound webhook bodies.
 	MaxPayloadJSONBytes = 512 << 10 // 512 KiB
@@ -66,6 +70,21 @@ func validateVarchar(path, s string, required bool) []FieldError {
 func validatePriority(path string, p int) []FieldError {
 	if p < 0 || p > 10 {
 		return []FieldError{{Path: path, Message: "must be between 0 and 10 (0 means default priority)"}}
+	}
+	return nil
+}
+
+// validateOptionalSendAt rejects send_at values too far in the future.
+func validateOptionalSendAt(path string, sendAt *time.Time) []FieldError {
+	if sendAt == nil {
+		return nil
+	}
+	max := time.Now().Add(MaxScheduleHorizon)
+	if sendAt.After(max) {
+		return []FieldError{{
+			Path:    path,
+			Message: fmt.Sprintf("must be at most %d days in the future", int(MaxScheduleHorizon/(24*time.Hour))),
+		}}
 	}
 	return nil
 }
@@ -282,6 +301,7 @@ func ValidateCreateRequest(req *CreateRequest) []FieldError {
 	out = append(out, validateVarchar("idempotency_key", req.IdempotencyKey, true)...)
 	out = append(out, validateVarchar("recipient", req.Recipient, true)...)
 	out = append(out, validatePriority("priority", req.Priority)...)
+	out = append(out, validateOptionalSendAt("send_at", req.SendAt)...)
 
 	pathP := "payload"
 	if req.Payload == nil {
@@ -324,6 +344,7 @@ func ValidateBatchSubmitRequest(req *BatchSubmitRequest) []FieldError {
 
 		out = append(out, validateVarchar(prefix+"recipient", item.Recipient, true)...)
 		out = append(out, validatePriority(prefix+"priority", item.Priority)...)
+		out = append(out, validateOptionalSendAt(prefix+"send_at", item.SendAt)...)
 
 		composite := req.IdempotencyKey + "-" + item.Recipient
 		if rl := runeLen(composite); rl > maxDBVarchar {

@@ -37,6 +37,7 @@ type CreateRequest struct {
 	TemplateID     *uuid.UUID         `json:"template_id"`
 	Priority       int                `json:"priority" binding:"gte=0,lte=10"`
 	Payload        map[string]any     `json:"payload"`
+	SendAt *time.Time `json:"send_at"`
 }
 
 // BatchNotificationItem is one row in a batch submit request.
@@ -46,6 +47,7 @@ type BatchNotificationItem struct {
 	TemplateID *uuid.UUID         `json:"template_id"`
 	Priority   int                `json:"priority" binding:"gte=0,lte=10"`
 	Payload    map[string]any     `json:"payload"`
+	SendAt     *time.Time         `json:"send_at"`
 }
 
 type BatchSubmitRequest struct {
@@ -172,6 +174,7 @@ func (h *NotificationHandler) HandleCreate(c *gin.Context) {
 	id := uuid.New()
 	now := time.Now()
 	priority := normalizedPriority(req.Priority)
+	sendAt := resolvedSendAt(now, req.SendAt)
 	notification := &domain.Notification{
 		ID:             id,
 		BatchID:        nil,
@@ -182,7 +185,7 @@ func (h *NotificationHandler) HandleCreate(c *gin.Context) {
 		Status:         domain.StatusPending,
 		Payload:        req.Payload,
 		IdempotencyKey: &req.IdempotencyKey,
-		SendAt:         now,
+		SendAt:         sendAt,
 	}
 
 	telemetry.NotificationsReceived.WithLabelValues(string(notification.Channel), "api").Inc()
@@ -198,9 +201,11 @@ func (h *NotificationHandler) HandleCreate(c *gin.Context) {
 	// If the ID from the DB is the same as the one we just made, it's NEW.
 	// If it's different, it's a DUPLICATE.
 	if actualID == notification.ID {
-		err := h.publisher.Publish(ctx, actualID, notification.Priority)
-		if err != nil {
-			telemetry.L(ctx).WarnContext(ctx, "fast-path publish failed; notification remains PENDING for sweeper", "id", notification.ID, "error", err)
+		if shouldFastPathPublish(sendAt) {
+			err := h.publisher.Publish(ctx, actualID, notification.Priority)
+			if err != nil {
+				telemetry.L(ctx).WarnContext(ctx, "fast-path publish failed; notification remains PENDING for sweeper", "id", notification.ID, "error", err)
+			}
 		}
 	} else {
 		telemetry.L(ctx).InfoContext(ctx, "ignoring duplicate ingress request", "key", req.IdempotencyKey)
@@ -209,6 +214,7 @@ func (h *NotificationHandler) HandleCreate(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{
 		"message":         "notification accepted for processing",
 		"notification_id": actualID.String(),
+		"send_at":         sendAt.Format(time.RFC3339Nano),
 	})
 }
 
@@ -243,7 +249,7 @@ func (h *NotificationHandler) HandleBatchSubmit(c *gin.Context) {
 			Status:         domain.StatusPending,
 			Payload:        item.Payload,
 			IdempotencyKey: &idempKey,
-			SendAt:         now,
+			SendAt:         resolvedSendAt(now, item.SendAt),
 		}
 
 		telemetry.NotificationsReceived.WithLabelValues(string(item.Channel), "api").Inc()
@@ -262,9 +268,9 @@ func (h *NotificationHandler) HandleBatchSubmit(c *gin.Context) {
 		insertedMap[id] = true
 	}
 
-	// Fast-Path: Publish to RabbitMQ
+	// Fast-Path: Publish to RabbitMQ only when send_at is due (immediate).
 	for _, n := range domainNotifications {
-		if insertedMap[n.ID] {
+		if insertedMap[n.ID] && shouldFastPathPublish(n.SendAt) {
 			err := h.publisher.Publish(ctx, n.ID, n.Priority)
 			if err != nil {
 				telemetry.L(ctx).WarnContext(ctx, "fast-path publish failed; notification remains PENDING for sweeper", "id", n.ID, "error", err)
@@ -352,4 +358,20 @@ func (h *NotificationHandler) HandleCancel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "notification successfully cancelled"})
+}
+
+// resolvedSendAt returns the wall time when the notification becomes eligible
+// for the sweeper (send_at <= now). Omitted send_at preserves legacy behaviour (now).
+func resolvedSendAt(now time.Time, requested *time.Time) time.Time {
+	if requested == nil {
+		return now
+	}
+	return *requested
+}
+
+// shouldFastPathPublish is true only when the row is already due, so we may
+// enqueue to RabbitMQ immediately. Future send_at must not be published here,
+// otherwise the worker could deliver before the scheduled time.
+func shouldFastPathPublish(sendAt time.Time) bool {
+	return !sendAt.After(time.Now())
 }

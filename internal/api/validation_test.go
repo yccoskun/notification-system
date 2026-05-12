@@ -3,6 +3,7 @@ package api
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -137,6 +138,48 @@ func TestValidateBatchSubmitRequest_multipleRows(t *testing.T) {
 	errs := ValidateBatchSubmitRequest(req)
 	require.Len(t, errs, 1)
 	require.Equal(t, "notifications[1].payload.message", errs[0].Path)
+}
+
+func TestValidateCreateRequest_sendAtTooFarFuture(t *testing.T) {
+	far := time.Now().Add(MaxScheduleHorizon + 24*time.Hour)
+	req := &CreateRequest{
+		IdempotencyKey: "k1",
+		Recipient:      "+15551234567",
+		Channel:        domain.ChannelSMS,
+		Payload:        map[string]any{"message": "hello"},
+		SendAt:         &far,
+	}
+	errs := ValidateCreateRequest(req)
+	require.Len(t, errs, 1)
+	require.Equal(t, "send_at", errs[0].Path)
+}
+
+func TestValidateCreateRequest_sendAtWithinHorizon(t *testing.T) {
+	ok := time.Now().Add(30 * 24 * time.Hour)
+	req := &CreateRequest{
+		IdempotencyKey: "k1",
+		Recipient:      "+15551234567",
+		Channel:        domain.ChannelSMS,
+		Payload:        map[string]any{"message": "hello"},
+		SendAt:         &ok,
+	}
+	require.Empty(t, ValidateCreateRequest(req))
+}
+
+func TestValidateBatchSubmitRequest_sendAtTooFarFuture(t *testing.T) {
+	far := time.Now().Add(MaxScheduleHorizon + time.Hour)
+	req := &BatchSubmitRequest{
+		IdempotencyKey: "batch-1",
+		Notifications: []BatchNotificationItem{{
+			Recipient: "a",
+			Channel:   domain.ChannelSMS,
+			Payload:   map[string]any{"message": "x"},
+			SendAt:    &far,
+		}},
+	}
+	errs := ValidateBatchSubmitRequest(req)
+	require.Len(t, errs, 1)
+	require.Equal(t, "notifications[0].send_at", errs[0].Path)
 }
 
 func TestNormalizedPriority(t *testing.T) {
