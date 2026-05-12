@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -53,7 +55,7 @@ func (c *Consumer) Start(ctx context.Context, concurrency int, handler HandlerFu
 						slog.Warn("amqp channel closed")
 						return
 					}
-					c.processMessage(msg, handler)
+					processDelivery(msg, handler)
 				}
 			}
 		}(i)
@@ -61,7 +63,7 @@ func (c *Consumer) Start(ctx context.Context, concurrency int, handler HandlerFu
 	return nil
 }
 
-func (c *Consumer) processMessage(msg amqp.Delivery, handler HandlerFunc) {
+func processDelivery(msg amqp.Delivery, handler HandlerFunc) {
 	// EXTRACT: Pull the TraceID out of the AMQP headers.
 	// We pass context.Background() as the base, because the true context is reconstructed from the headers.
 	ctx := otel.GetTextMapPropagator().Extract(context.Background(), amqpTableCarrier(msg.Headers))
@@ -99,5 +101,97 @@ func (c *Consumer) processMessage(msg amqp.Delivery, handler HandlerFunc) {
 	// Success! Safely remove from RabbitMQ.
 	if err := msg.Ack(false); err != nil {
 		slog.Error("failed to ack message", "error", err)
+	}
+}
+
+// RunResilientConsumer maintains a long-lived consumer session: it reconnects
+// automatically when the broker or TCP session drops.
+func RunResilientConsumer(ctx context.Context, url string, concurrency int, handler HandlerFunc) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		conn, ch, err := NewChannel(url)
+		if err != nil {
+			slog.Warn("rabbitmq consumer dial failed", "error", err)
+			sleepUntil(ctx, 2*time.Second)
+			continue
+		}
+
+		if err := SetupTopology(ch); err != nil {
+			slog.Warn("rabbitmq consumer topology failed", "error", err)
+			_ = ch.Close()
+			_ = conn.Close()
+			sleepUntil(ctx, 2*time.Second)
+			continue
+		}
+
+		err = runConsumerSession(ctx, conn, ch, concurrency, handler)
+		_ = ch.Close()
+		_ = conn.Close()
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		slog.Warn("rabbitmq consumer session ended, reconnecting", "error", err)
+		sleepUntil(ctx, 2*time.Second)
+	}
+}
+
+func runConsumerSession(ctx context.Context, conn *amqp.Connection, ch *amqp.Channel, concurrency int, handler HandlerFunc) error {
+	if err := ch.Qos(concurrency, 0, false); err != nil {
+		return fmt.Errorf("qos: %w", err)
+	}
+
+	msgs, err := ch.Consume("notifications.main", "", false, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("consume: %w", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					slog.Info("shutting down amqp worker", "worker_id", workerID)
+					return
+				case msg, ok := <-msgs:
+					if !ok {
+						slog.Warn("amqp channel closed", "worker_id", workerID)
+						return
+					}
+					processDelivery(msg, handler)
+				}
+			}
+		}(i)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = conn.Close()
+		wg.Wait()
+		return ctx.Err()
+	case <-done:
+		return fmt.Errorf("delivery channel closed")
+	}
+}
+
+func sleepUntil(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
 	}
 }

@@ -67,8 +67,11 @@ func (s *Sweeper) sweep(ctx context.Context) {
 		err := s.publisher.Publish(ctx, n.ID, n.Priority)
 		if err != nil {
 			slog.ErrorContext(ctx, "sweeper failed to publish message", "id", n.ID, "error", err)
-			// We don't rollback the DB. The SQL query pushed send_at 5 minutes into the future.
-			// The sweeper will naturally retry this message again in 5 minutes.
+			// Lease was advanced by GetPendingForDelivery (+5m). Publish failed (e.g. broker
+			// down); reset send_at so the next sweep can retry—do not wait for the lease TTL.
+			if retryErr := s.repo.ScheduleRetry(ctx, n.ID, time.Now()); retryErr != nil {
+				slog.ErrorContext(ctx, "sweeper failed to reschedule after publish error", "id", n.ID, "error", retryErr)
+			}
 		}
 	}
 }

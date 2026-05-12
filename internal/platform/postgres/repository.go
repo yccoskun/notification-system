@@ -190,14 +190,27 @@ func (r *NotificationRepository) List(ctx context.Context, filter domain.Notific
 	return out, total, nil
 }
 
-// UpdateStatus records the outcome of a delivery attempt.
+// UpdateStatus records the outcome of a delivery attempt. When status becomes
+// SENT, send_at is set to NOW() so the row no longer carries the sweeper lease
+// timestamp (NOW()+5m) used while the message was pending on the queue.
 func (r *NotificationRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status domain.NotificationStatus, retryCount int, lastErr *string) error {
-	query := `
+	var query string
+	var args []any
+	if status == domain.StatusSent {
+		query = `
+		UPDATE notifications 
+		SET status = $1, retry_count = $2, last_error = $3, send_at = NOW(), updated_at = NOW() 
+		WHERE id = $4`
+		args = []any{status, retryCount, lastErr, id}
+	} else {
+		query = `
 		UPDATE notifications 
 		SET status = $1, retry_count = $2, last_error = $3, updated_at = NOW() 
 		WHERE id = $4`
+		args = []any{status, retryCount, lastErr, id}
+	}
 
-	tag, err := r.db.Exec(ctx, query, status, retryCount, lastErr, id)
+	tag, err := r.db.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
@@ -207,8 +220,11 @@ func (r *NotificationRepository) UpdateStatus(ctx context.Context, id uuid.UUID,
 	return nil
 }
 
-// GetPendingForDelivery atomically fetches pending messages and pushes their send_at
-// timestamp 5 minutes into the future to act as a distributed lease lock.
+// GetPendingForDelivery atomically claims pending rows for the sweeper by
+// advancing send_at by 5 minutes. That value is a lease (avoid duplicate sweeper
+// claims while a publish is expected to reach the broker), not a user-visible
+// "deliver after" time. If publish fails, the sweeper calls ScheduleRetry(..., now)
+// to clear the lease so the row becomes eligible again without waiting 5 minutes.
 func (r *NotificationRepository) GetPendingForDelivery(ctx context.Context, batchSize int) ([]*domain.Notification, error) {
 	query := `
 		WITH locked_rows AS (

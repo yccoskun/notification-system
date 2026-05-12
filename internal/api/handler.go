@@ -196,7 +196,7 @@ func (h *NotificationHandler) HandleCreate(c *gin.Context) {
 	if actualID == notification.ID {
 		err := h.publisher.Publish(ctx, actualID, notification.Priority)
 		if err != nil {
-			slog.WarnContext(ctx, "fast-path publish failed", "id", notification.ID)
+			slog.WarnContext(ctx, "fast-path publish failed; notification remains PENDING for sweeper", "id", notification.ID, "error", err)
 		}
 	} else {
 		slog.InfoContext(ctx, "ignoring duplicate ingress request", "key", req.IdempotencyKey)
@@ -258,7 +258,7 @@ func (h *NotificationHandler) HandleBatchSubmit(c *gin.Context) {
 		if insertedMap[n.ID] {
 			err := h.publisher.Publish(ctx, n.ID, n.Priority)
 			if err != nil {
-				slog.WarnContext(ctx, "fast-path publish failed, falling back to sweeper", "id", n.ID, "error", err)
+				slog.WarnContext(ctx, "fast-path publish failed; notification remains PENDING for sweeper", "id", n.ID, "error", err)
 			}
 		}
 	}

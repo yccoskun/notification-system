@@ -46,14 +46,11 @@ func main() {
 	// 1. Platform Setup (DB, Redis, RMQ)
 	dbPool := postgres.MustConnect(dbURL)
 	rdb := redis.NewClient(&redis.Options{Addr: os.Getenv("REDIS_URL")})
-	_, ch, err := rabbitmq.NewChannel(os.Getenv("RABBITMQ_URL"))
+	rmqPub, err := rabbitmq.NewResilientPublisher(os.Getenv("RABBITMQ_URL"))
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("rabbitmq publisher: %v", err))
 	}
-	if err := rabbitmq.SetupTopology(ch); err != nil {
-		panic(fmt.Sprintf("failed to setup rabbitmq topology: %v", err))
-	}
-	rmqPub := rabbitmq.NewPublisher(ch)
+	defer func() { _ = rmqPub.Close() }()
 
 	// 2. Repository & Publisher Init
 	repo := postgres.NewNotificationRepository(dbPool)

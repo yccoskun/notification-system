@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -68,20 +67,10 @@ func main() {
 		}
 	}()
 
-	// 4. RabbitMQ Consumer
-	_, ch, err := rabbitmq.NewChannel(os.Getenv("RABBITMQ_URL"))
-	if err != nil {
-		panic(err)
-	}
-	if err := rabbitmq.SetupTopology(ch); err != nil {
-		panic(fmt.Sprintf("failed to setup rabbitmq topology: %v", err))
-	}
-	consumer := rabbitmq.NewConsumer(ch)
-
-	// Start consuming and passing tasks to the orchestrator
+	// 4. RabbitMQ consumer (reconnects on broker / TCP failure)
 	go func() {
-		if err := consumer.Start(ctx, 10, deliverySvc.HandleDelivery); err != nil {
-			slog.Error("consumer crashed", "error", err)
+		if err := rabbitmq.RunResilientConsumer(ctx, os.Getenv("RABBITMQ_URL"), 10, deliverySvc.HandleDelivery); err != nil {
+			slog.Error("rabbitmq consumer stopped", "error", err)
 		}
 	}()
 
