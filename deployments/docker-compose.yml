@@ -105,6 +105,8 @@ services:
       - SMS_PROVIDER_URL=${SMS_PROVIDER_URL}
       - PUSH_PROVIDER_URL=${PUSH_PROVIDER_URL}
       - OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317
+    ports:
+      - "8081:8081"
     depends_on:
       rabbitmq: { condition: service_healthy }
       redis: { condition: service_healthy }

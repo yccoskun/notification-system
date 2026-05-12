@@ -271,6 +271,31 @@ func (r *NotificationRepository) GetPendingForDelivery(ctx context.Context, batc
 	return notifications, nil
 }
 
+// CountByStatus returns the number of notifications grouped by channel and status.
+// This is called on each Prometheus scrape by the QueueDepthCollector, so it must be fast.
+func (r *NotificationRepository) CountByStatus(ctx context.Context) (map[string]map[string]int64, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT channel::text, status::text, COUNT(*) FROM notifications GROUP BY channel, status`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count notifications by status: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]map[string]int64)
+	for rows.Next() {
+		var channel, status string
+		var count int64
+		if err := rows.Scan(&channel, &status, &count); err != nil {
+			return nil, fmt.Errorf("failed to scan count row: %w", err)
+		}
+		if result[channel] == nil {
+			result[channel] = make(map[string]int64)
+		}
+		result[channel][status] = count
+	}
+	return result, rows.Err()
+}
+
 // ScheduleRetry pushes the send_at timestamp into the future for exponential backoff.
 func (r *NotificationRepository) ScheduleRetry(ctx context.Context, id uuid.UUID, sendAt time.Time) error {
 	query := `

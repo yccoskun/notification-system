@@ -2,11 +2,40 @@ package api
 
 import (
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+
+	"notification-system/internal/platform/telemetry"
 )
+
+// prometheusMiddleware records HTTP request duration and in-flight count for
+// every domain route. Infrastructure endpoints (/health, /metrics) are skipped
+// so they don't pollute latency percentiles.
+func prometheusMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		path := c.FullPath()
+		if path == "/health" || path == "/metrics" || path == "" {
+			c.Next()
+			return
+		}
+
+		telemetry.HTTPRequestsInFlight.Inc()
+		start := time.Now()
+
+		c.Next()
+
+		telemetry.HTTPRequestsInFlight.Dec()
+		telemetry.HTTPRequestDuration.WithLabelValues(
+			c.Request.Method,
+			path,
+			strconv.Itoa(c.Writer.Status()),
+		).Observe(time.Since(start).Seconds())
+	}
+}
 
 // NewRouter initializes the HTTP engine and maps all routes.
 func NewRouter(serviceName string, notifHandler *NotificationHandler, wsHub *WSHub) *gin.Engine {
@@ -18,6 +47,7 @@ func NewRouter(serviceName string, notifHandler *NotificationHandler, wsHub *WSH
 	// Core Middlewares
 	r.Use(gin.Recovery())
 	r.Use(otelgin.Middleware(serviceName))
+	r.Use(prometheusMiddleware())
 
 	// Infrastructure Endpoints (Unversioned)
 	r.GET("/health", func(c *gin.Context) {

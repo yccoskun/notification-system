@@ -16,6 +16,7 @@ import (
 	redisPlatform "notification-system/internal/platform/redis"
 	"notification-system/internal/platform/telemetry"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -54,6 +55,7 @@ func main() {
 
 	// 2. Repository & Publisher Init
 	repo := postgres.NewNotificationRepository(dbPool)
+	prometheus.MustRegister(telemetry.NewQueueDepthCollector(repo))
 	redisPubSub := redisPlatform.NewPubSub(rdb)
 
 	// 3. WebSocket Hub Init

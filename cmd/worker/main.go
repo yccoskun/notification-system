@@ -16,6 +16,7 @@ import (
 	"notification-system/internal/platform/telemetry"
 	"notification-system/internal/service"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
@@ -40,6 +41,7 @@ func main() {
 
 	// 2. Dependencies
 	repo := postgres.NewNotificationRepository(dbPool)
+	prometheus.MustRegister(telemetry.NewQueueDepthCollector(repo))
 	tmplRepo := postgres.NewTemplateRepository(dbPool)
 	limiter := redisPlatform.NewRateLimiter(rdb)
 	idemp := redisPlatform.NewIdempotencyGuard(rdb)

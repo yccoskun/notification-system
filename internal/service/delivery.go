@@ -71,6 +71,7 @@ func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) erro
 
 	if !allowed {
 		slog.InfoContext(ctx, "rate limit hit: delaying notification", "id", id)
+		telemetry.RateLimitHits.WithLabelValues(string(n.Channel)).Inc()
 		return s.repo.ScheduleRetry(ctx, id, time.Now().Add(1*time.Minute))
 	}
 
@@ -81,13 +82,10 @@ func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) erro
 		}
 	}
 
-	// 4. Provider Call & Latency Tracking
-	start := time.Now()
+	// 4. Provider Call
+	// DeliveryLatency is observed inside WebhookProvider.Send (the authoritative place),
+	// so we do not record it again here to avoid double-counting.
 	err = p.Send(ctx, n)
-	duration := time.Since(start).Seconds()
-
-	// FIXED: Observe requires label values for a HistogramVec
-	telemetry.DeliveryLatency.WithLabelValues(string(n.Channel)).Observe(duration)
 
 	if err != nil {
 		return s.handleFailure(ctx, n, err, true)
