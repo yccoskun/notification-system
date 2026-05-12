@@ -1,7 +1,6 @@
 networks:
   notification_net:
     driver: bridge
-    name: notification_net
 
 volumes:
   postgres_data:
@@ -70,7 +69,6 @@ services:
       timeout: 3s
       retries: 5
 
-  # --- ADDED: THE CORE APPLICATIONS ---
 
   api:
     build:
@@ -88,6 +86,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
     networks:
       - notification_net
 
@@ -108,6 +107,7 @@ services:
     ports:
       - "8081:8081"
     depends_on:
+      postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       redis: { condition: service_healthy }
     networks:
@@ -129,9 +129,9 @@ services:
       - notification_net
     restart: always
 
-  # 4. Metrics & Tracing (Restored your originals)
+  # 4. Metrics & Tracing
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.55.1
     container_name: notification_prometheus
     restart: unless-stopped
     ports:
@@ -143,7 +143,7 @@ services:
       - notification_net
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.62.0
     container_name: notification_jaeger
     restart: unless-stopped
     environment:
