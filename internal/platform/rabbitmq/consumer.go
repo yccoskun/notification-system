@@ -13,6 +13,8 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
+
+	"notification-system/internal/platform/telemetry"
 )
 
 // HandlerFunc defines the contract for our core business logic.
@@ -64,8 +66,8 @@ func (c *Consumer) Start(ctx context.Context, concurrency int, handler HandlerFu
 }
 
 func processDelivery(msg amqp.Delivery, handler HandlerFunc) {
-	// EXTRACT: Pull the TraceID out of the AMQP headers.
-	// We pass context.Background() as the base, because the true context is reconstructed from the headers.
+	// Reconstruct the distributed trace from AMQP headers so this span is
+	// correctly parented to the publisher's span in Jaeger.
 	ctx := otel.GetTextMapPropagator().Extract(context.Background(), amqpTableCarrier(msg.Headers))
 	ctx, span := otel.Tracer("rabbitmq").Start(ctx, "ConsumeFromQueue", trace.WithSpanKind(trace.SpanKindConsumer))
 	defer span.End()
@@ -73,34 +75,34 @@ func processDelivery(msg amqp.Delivery, handler HandlerFunc) {
 	var payload NotificationMessage
 	if err := json.Unmarshal(msg.Body, &payload); err != nil {
 		slog.ErrorContext(ctx, "poison pill detected, dropping message", "error", err)
-		// Nack without requeueing drops it completely (or routes to a DLQ if configured)
 		if err := msg.Nack(false, false); err != nil {
-			slog.Error("failed to nack poison pill", "error", err)
+			slog.ErrorContext(ctx, "failed to nack poison pill", "error", err)
 		}
 		return
 	}
 
-	// Hand over to the business logic orchestrator
+	// Enrich the context logger with notification_id once so every log call
+	// inside the delivery pipeline automatically includes it without repetition.
+	ctx = telemetry.WithLogger(ctx, telemetry.L(ctx).With("notification_id", payload.ID))
+
 	err := handler(ctx, payload.ID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			slog.WarnContext(ctx, "dropping orphan message: notification not in DB", "id", payload.ID)
+			telemetry.L(ctx).WarnContext(ctx, "dropping orphan message: notification not in DB")
 			if err := msg.Ack(false); err != nil {
-				slog.Error("failed to ack message", "error", err)
+				telemetry.L(ctx).ErrorContext(ctx, "failed to ack orphan message", "error", err)
 			}
 			return
 		}
-		slog.ErrorContext(ctx, "handler failed, message requeued", "error", err, "id", payload.ID)
-		// If our rate-limiter blocked it, or the API crashed, put it back in the queue
+		telemetry.L(ctx).ErrorContext(ctx, "handler failed, message requeued", "error", err)
 		if err := msg.Nack(false, true); err != nil {
-			slog.Error("failed to nack/requeue", "error", err)
+			telemetry.L(ctx).ErrorContext(ctx, "failed to nack/requeue", "error", err)
 		}
 		return
 	}
 
-	// Success! Safely remove from RabbitMQ.
 	if err := msg.Ack(false); err != nil {
-		slog.Error("failed to ack message", "error", err)
+		telemetry.L(ctx).ErrorContext(ctx, "failed to ack message", "error", err)
 	}
 }
 

@@ -22,10 +22,12 @@ import (
 )
 
 func main() {
+	telemetry.InitLogger("worker")
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	shutdownTracer, err := telemetry.InitTracer(ctx, "api-service", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	shutdownTracer, err := telemetry.InitTracer(ctx, "worker", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	if err != nil {
 		slog.Error("failed to initialize tracer", "error", err)
 	} else {

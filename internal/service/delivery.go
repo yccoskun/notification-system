@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log/slog"
 	"text/template"
 	"time"
 
@@ -46,13 +45,13 @@ func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) erro
 	// 1. Idempotency
 	locked, err := s.idemp.Acquire(ctx, id.String(), 10*time.Minute)
 	if err != nil || !locked {
-		slog.ErrorContext(ctx, "could not acquire idempotency lock, redis down: moving notification to hibernation", "error", err, "id", id)
+		telemetry.L(ctx).ErrorContext(ctx, "could not acquire idempotency lock, redis down: moving notification to hibernation", "error", err)
 		_ = s.repo.ScheduleRetry(ctx, id, time.Now().Add(5*time.Minute))
 		return nil
 	}
 	defer func() {
 		if err := s.idemp.Release(ctx, id.String()); err != nil {
-			slog.Warn("failed to release idempotency lock", "id", id, "error", err)
+			telemetry.L(ctx).WarnContext(ctx, "failed to release idempotency lock", "error", err)
 		}
 	}()
 
@@ -64,13 +63,12 @@ func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) erro
 	// 2. Rate Limiting
 	allowed, err := s.limiter.Allow(ctx, "ratelimit:"+string(n.Channel)+":"+n.Recipient)
 	if err != nil {
-		// REDIS IS DOWN: Don't crash, just log and back off
-		slog.ErrorContext(ctx, "rate limiter unreachable, backing off", "error", err, "id", id)
+		telemetry.L(ctx).ErrorContext(ctx, "rate limiter unreachable, backing off", "error", err)
 		return s.repo.ScheduleRetry(ctx, id, time.Now().Add(1*time.Minute))
 	}
 
 	if !allowed {
-		slog.InfoContext(ctx, "rate limit hit: delaying notification", "id", id)
+		telemetry.L(ctx).InfoContext(ctx, "rate limit hit: delaying notification")
 		telemetry.RateLimitHits.WithLabelValues(string(n.Channel)).Inc()
 		return s.repo.ScheduleRetry(ctx, id, time.Now().Add(1*time.Minute))
 	}

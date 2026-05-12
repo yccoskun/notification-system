@@ -46,7 +46,8 @@ func NewRouter(serviceName string, notifHandler *NotificationHandler, wsHub *WSH
 
 	// Core Middlewares
 	r.Use(gin.Recovery())
-	r.Use(otelgin.Middleware(serviceName))
+	r.Use(otelgin.Middleware(serviceName)) // must run first: populates OTel span so downstream middleware can read trace_id
+	r.Use(correlationMiddleware())         // attaches request_id + per-request logger to context
 	r.Use(prometheusMiddleware())
 
 	// Infrastructure Endpoints (Unversioned)
