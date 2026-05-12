@@ -32,23 +32,26 @@ func NewNotificationHandler(repo domain.NotificationRepository, publisher Broker
 // --- DTOs (Data Transfer Objects) ---
 
 type CreateRequest struct {
-	IdempotencyKey string             `json:"idempotency_key" binding:"required"`
-	Recipient      string             `json:"recipient" binding:"required"`
+	IdempotencyKey string             `json:"idempotency_key" binding:"required,max=255"`
+	Recipient      string             `json:"recipient" binding:"required,max=255"`
 	Channel        domain.ChannelType `json:"channel" binding:"required,oneof=SMS EMAIL PUSH"`
 	TemplateID     *uuid.UUID         `json:"template_id"`
-	Priority       int                `json:"priority" binding:"max=10"`
-	Payload        map[string]any     `json:"payload" binding:"required"`
+	Priority       int                `json:"priority" binding:"gte=0,lte=10"`
+	Payload        map[string]any     `json:"payload"`
+}
+
+// BatchNotificationItem is one row in a batch submit request.
+type BatchNotificationItem struct {
+	Recipient  string             `json:"recipient" binding:"required,max=255"`
+	Channel    domain.ChannelType `json:"channel" binding:"required,oneof=SMS EMAIL PUSH"`
+	TemplateID *uuid.UUID         `json:"template_id"`
+	Priority   int                `json:"priority" binding:"gte=0,lte=10"`
+	Payload    map[string]any     `json:"payload"`
 }
 
 type BatchSubmitRequest struct {
-	IdempotencyKey string `json:"idempotency_key" binding:"required"`
-	Notifications  []struct {
-		Recipient  string             `json:"recipient" binding:"required"`
-		Channel    domain.ChannelType `json:"channel" binding:"required,oneof=SMS EMAIL PUSH"`
-		TemplateID *uuid.UUID         `json:"template_id"`
-		Priority   int                `json:"priority" binding:"max=10"`
-		Payload    map[string]any     `json:"payload" binding:"required"`
-	} `json:"notifications" binding:"required,max=1000"`
+	IdempotencyKey string                  `json:"idempotency_key" binding:"required,max=255"`
+	Notifications  []BatchNotificationItem `json:"notifications" binding:"required,min=1,max=1000,dive"`
 }
 
 // --- Route Handlers ---
@@ -162,12 +165,14 @@ func (h *NotificationHandler) HandleCreate(c *gin.Context) {
 		return
 	}
 
+	if fieldErrs := ValidateCreateRequest(&req); len(fieldErrs) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "validation failed", "fields": fieldErrs})
+		return
+	}
+
 	id := uuid.New()
 	now := time.Now()
-	priority := req.Priority
-	if priority == 0 {
-		priority = 5
-	}
+	priority := normalizedPriority(req.Priority)
 	notification := &domain.Notification{
 		ID:             id,
 		BatchID:        nil,
@@ -218,6 +223,11 @@ func (h *NotificationHandler) HandleBatchSubmit(c *gin.Context) {
 		return
 	}
 
+	if fieldErrs := ValidateBatchSubmitRequest(&req); len(fieldErrs) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "validation failed", "fields": fieldErrs})
+		return
+	}
+
 	batchID := uuid.New()
 	domainNotifications := make([]*domain.Notification, len(req.Notifications))
 	now := time.Now()
@@ -230,7 +240,7 @@ func (h *NotificationHandler) HandleBatchSubmit(c *gin.Context) {
 			Recipient:      item.Recipient,
 			Channel:        item.Channel,
 			TemplateID:     item.TemplateID,
-			Priority:       item.Priority,
+			Priority:       normalizedPriority(item.Priority),
 			Status:         domain.StatusPending,
 			Payload:        item.Payload,
 			IdempotencyKey: &idempKey,
