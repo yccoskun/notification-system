@@ -8,6 +8,28 @@ servers:
     description: Local Development Server
 
 paths:
+  /ws:
+    get:
+      summary: WebSocket stream for real-time notification status updates
+      description: |
+        Upgrade to WebSocket. Each text message is JSON with fields `id`, `status`, and optional `detail`
+        (see `StatusWebSocketMessage`). Connect with optional query `watch=<notification-uuid>` to receive only
+        events for that notification. Configure `WEBSOCKET_ALLOWED_ORIGINS` on the API (comma-separated list, or `*`)
+        to restrict browser `Origin` headers; if unset, all origins are allowed (development default).
+      parameters:
+        - name: watch
+          in: query
+          required: false
+          description: When set, only updates for this notification id are delivered on this connection.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '101':
+          description: Switching Protocols (WebSocket)
+        '400':
+          description: Invalid watch query parameter
+
   /notifications:
     get:
       summary: List notifications with optional filters and pagination
@@ -172,6 +194,20 @@ paths:
 
 components:
   schemas:
+    StatusWebSocketMessage:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PENDING, SENT, FAILED, CANCELLED]
+        detail:
+          type: string
+          description: Optional machine-readable sub-state (e.g. rate_limited, retry_scheduled, idempotency_unavailable).
+
     CreateRequest:
       type: object
       required:

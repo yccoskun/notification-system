@@ -19,13 +19,20 @@ type BrokerPublisher interface {
 	Publish(ctx context.Context, notificationID uuid.UUID, priority int) error
 }
 
-type NotificationHandler struct {
-	repo      domain.NotificationRepository
-	publisher BrokerPublisher
+// StatusBroadcaster publishes notification lifecycle events to Redis for WebSocket fan-out.
+type StatusBroadcaster interface {
+	Publish(ctx context.Context, id, status string) error
+	PublishWithDetail(ctx context.Context, id, status, detail string) error
 }
 
-func NewNotificationHandler(repo domain.NotificationRepository, publisher BrokerPublisher) *NotificationHandler {
-	return &NotificationHandler{repo: repo, publisher: publisher}
+type NotificationHandler struct {
+	repo       domain.NotificationRepository
+	publisher  BrokerPublisher
+	statusPub  StatusBroadcaster
+}
+
+func NewNotificationHandler(repo domain.NotificationRepository, publisher BrokerPublisher, statusPub StatusBroadcaster) *NotificationHandler {
+	return &NotificationHandler{repo: repo, publisher: publisher, statusPub: statusPub}
 }
 
 // --- DTOs (Data Transfer Objects) ---
@@ -356,6 +363,8 @@ func (h *NotificationHandler) HandleCancel(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process cancellation"})
 		return
 	}
+
+	_ = h.statusPub.Publish(ctx, id.String(), string(domain.StatusCancelled))
 
 	c.JSON(http.StatusOK, gin.H{"message": "notification successfully cancelled"})
 }

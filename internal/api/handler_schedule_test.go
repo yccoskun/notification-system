@@ -80,7 +80,7 @@ func TestHandleCreate_futureSendAtSkipsBrokerPublish(t *testing.T) {
 
 	repo := &scheduleRepo{}
 	pub := &countingPublisher{}
-	h := api.NewNotificationHandler(repo, pub)
+	h := api.NewNotificationHandler(repo, pub, noopStatusPublisher{})
 	r := gin.New()
 	r.POST("/notifications", h.HandleCreate)
 
@@ -109,7 +109,7 @@ func TestHandleCreate_immediateSendAtPublishes(t *testing.T) {
 
 	repo := &scheduleRepo{}
 	pub := &countingPublisher{}
-	h := api.NewNotificationHandler(repo, pub)
+	h := api.NewNotificationHandler(repo, pub, noopStatusPublisher{})
 	r := gin.New()
 	r.POST("/notifications", h.HandleCreate)
 
@@ -134,7 +134,7 @@ func TestHandleCreate_omitSendAtPublishes(t *testing.T) {
 
 	repo := &scheduleRepo{}
 	pub := &countingPublisher{}
-	h := api.NewNotificationHandler(repo, pub)
+	h := api.NewNotificationHandler(repo, pub, noopStatusPublisher{})
 	r := gin.New()
 	r.POST("/notifications", h.HandleCreate)
 
@@ -170,7 +170,7 @@ func TestHandleBatchSubmit_mixedSchedulePublishCount(t *testing.T) {
 
 	repo := &scheduleRepo{}
 	pub := &countingPublisher{}
-	h := api.NewNotificationHandler(repo, pub)
+	h := api.NewNotificationHandler(repo, pub, noopStatusPublisher{})
 	r := gin.New()
 	r.POST("/batch", h.HandleBatchSubmit)
 
@@ -198,7 +198,7 @@ func TestHandleCreate_sendAtTooFarFuture400(t *testing.T) {
 
 	repo := &scheduleRepo{}
 	pub := &countingPublisher{}
-	h := api.NewNotificationHandler(repo, pub)
+	h := api.NewNotificationHandler(repo, pub, noopStatusPublisher{})
 	r := gin.New()
 	r.POST("/notifications", h.HandleCreate)
 
@@ -225,7 +225,7 @@ func TestHandleCreate_responseIncludesSendAt(t *testing.T) {
 	b, _ := json.Marshal(body)
 
 	repo := &scheduleRepo{}
-	h := api.NewNotificationHandler(repo, &countingPublisher{})
+	h := api.NewNotificationHandler(repo, &countingPublisher{}, noopStatusPublisher{})
 	r := gin.New()
 	r.POST("/notifications", h.HandleCreate)
 

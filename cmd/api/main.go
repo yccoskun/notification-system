@@ -66,7 +66,7 @@ func main() {
 	go hub.ListenRedis(ctx, redisPubSub.Subscribe(ctx))
 
 	// 4. API Handler & Router
-	handler := api.NewNotificationHandler(repo, rmqPub)
+	handler := api.NewNotificationHandler(repo, rmqPub, redisPubSub)
 	router := api.NewRouter("api-service", handler, hub)
 
 	// 5. Graceful Server Startup

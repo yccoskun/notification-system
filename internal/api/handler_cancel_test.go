@@ -92,6 +92,56 @@ func (r *cancelStubRepo) ScheduleRetry(ctx context.Context, id uuid.UUID, sendAt
 	return nil
 }
 
+type captureStatusPublisher struct {
+	mu       sync.Mutex
+	publish  []string
+	detail   []string
+}
+
+func (c *captureStatusPublisher) Publish(ctx context.Context, id, status string) error {
+	c.mu.Lock()
+	c.publish = append(c.publish, id+"|"+status)
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *captureStatusPublisher) PublishWithDetail(ctx context.Context, id, status, detail string) error {
+	c.mu.Lock()
+	c.detail = append(c.detail, id+"|"+status+"|"+detail)
+	c.mu.Unlock()
+	return nil
+}
+
+func TestHandleCancel_BroadcastsCancelledToStatusChannel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	id := uuid.New()
+	repo := newCancelStubRepo()
+	repo.seed(domain.Notification{
+		ID:        id,
+		Recipient: "a@b.com",
+		Channel:   domain.ChannelEmail,
+		Payload:   map[string]any{},
+		Priority:  5,
+		Status:    domain.StatusPending,
+		SendAt:    time.Now(),
+	})
+
+	statusPub := &captureStatusPublisher{}
+	r := gin.New()
+	h := api.NewNotificationHandler(repo, noopPublisher{}, statusPub)
+	r.DELETE("/notifications/:id", h.HandleCancel)
+
+	req := httptest.NewRequest(http.MethodDelete, "/notifications/"+id.String(), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	statusPub.mu.Lock()
+	defer statusPub.mu.Unlock()
+	require.Contains(t, statusPub.publish, id.String()+"|"+string(domain.StatusCancelled))
+}
+
 func TestHandleCancel_PendingUsesCancelledStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -108,7 +158,7 @@ func TestHandleCancel_PendingUsesCancelledStatus(t *testing.T) {
 	})
 
 	r := gin.New()
-	h := api.NewNotificationHandler(repo, noopPublisher{})
+	h := api.NewNotificationHandler(repo, noopPublisher{}, noopStatusPublisher{})
 	r.DELETE("/notifications/:id", h.HandleCancel)
 
 	req := httptest.NewRequest(http.MethodDelete, "/notifications/"+id.String(), nil)
@@ -140,7 +190,7 @@ func TestHandleCancel_NotPendingConflict(t *testing.T) {
 	})
 
 	r := gin.New()
-	h := api.NewNotificationHandler(repo, noopPublisher{})
+	h := api.NewNotificationHandler(repo, noopPublisher{}, noopStatusPublisher{})
 	r.DELETE("/notifications/:id", h.HandleCancel)
 
 	req := httptest.NewRequest(http.MethodDelete, "/notifications/"+id.String(), nil)
@@ -156,7 +206,7 @@ func TestHandleCancel_NotFound(t *testing.T) {
 
 	repo := newCancelStubRepo()
 	r := gin.New()
-	h := api.NewNotificationHandler(repo, noopPublisher{})
+	h := api.NewNotificationHandler(repo, noopPublisher{}, noopStatusPublisher{})
 	r.DELETE("/notifications/:id", h.HandleCancel)
 
 	req := httptest.NewRequest(http.MethodDelete, "/notifications/"+uuid.New().String(), nil)
@@ -171,7 +221,7 @@ func TestHandleCancel_InvalidUUID(t *testing.T) {
 
 	repo := newCancelStubRepo()
 	r := gin.New()
-	h := api.NewNotificationHandler(repo, noopPublisher{})
+	h := api.NewNotificationHandler(repo, noopPublisher{}, noopStatusPublisher{})
 	r.DELETE("/notifications/:id", h.HandleCancel)
 
 	req := httptest.NewRequest(http.MethodDelete, "/notifications/not-a-uuid", nil)

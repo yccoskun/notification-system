@@ -54,7 +54,7 @@ func (r *listStubRepo) ScheduleRetry(ctx context.Context, id uuid.UUID, sendAt t
 
 func TestHandleList_invalidStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := api.NewNotificationHandler(&listStubRepo{}, noopPublisher{})
+	h := api.NewNotificationHandler(&listStubRepo{}, noopPublisher{}, noopStatusPublisher{})
 	r := gin.New()
 	r.GET("/notifications", h.HandleList)
 
@@ -66,7 +66,7 @@ func TestHandleList_invalidStatus(t *testing.T) {
 
 func TestHandleList_invalidChannel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := api.NewNotificationHandler(&listStubRepo{}, noopPublisher{})
+	h := api.NewNotificationHandler(&listStubRepo{}, noopPublisher{}, noopStatusPublisher{})
 	r := gin.New()
 	r.GET("/notifications", h.HandleList)
 
@@ -78,7 +78,7 @@ func TestHandleList_invalidChannel(t *testing.T) {
 
 func TestHandleList_invalidDateOrder(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := api.NewNotificationHandler(&listStubRepo{}, noopPublisher{})
+	h := api.NewNotificationHandler(&listStubRepo{}, noopPublisher{}, noopStatusPublisher{})
 	r := gin.New()
 	r.GET("/notifications", h.HandleList)
 
@@ -101,7 +101,7 @@ func TestHandleList_passesFiltersAndPagination(t *testing.T) {
 			return []*domain.Notification{}, 0, nil
 		},
 	}
-	h := api.NewNotificationHandler(repo, noopPublisher{})
+	h := api.NewNotificationHandler(repo, noopPublisher{}, noopStatusPublisher{})
 	r := gin.New()
 	r.GET("/notifications", h.HandleList)
 

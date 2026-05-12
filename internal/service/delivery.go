@@ -17,6 +17,7 @@ import (
 // StatusPublisher is defined locally for the service layer
 type StatusPublisher interface {
 	Publish(ctx context.Context, id, status string) error
+	PublishWithDetail(ctx context.Context, id, status, detail string) error
 }
 
 type Provider interface {
@@ -46,7 +47,9 @@ func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) erro
 	locked, err := s.idemp.Acquire(ctx, id.String(), 10*time.Minute)
 	if err != nil || !locked {
 		telemetry.L(ctx).ErrorContext(ctx, "could not acquire idempotency lock, redis down: moving notification to hibernation", "error", err)
-		_ = s.repo.ScheduleRetry(ctx, id, time.Now().Add(5*time.Minute))
+		if schedErr := s.repo.ScheduleRetry(ctx, id, time.Now().Add(5*time.Minute)); schedErr == nil {
+			_ = s.statusPub.PublishWithDetail(ctx, id.String(), string(domain.StatusPending), "idempotency_unavailable")
+		}
 		return nil
 	}
 	defer func() {
@@ -64,13 +67,21 @@ func (s *DeliveryService) HandleDelivery(ctx context.Context, id uuid.UUID) erro
 	allowed, err := s.limiter.Allow(ctx, "ratelimit:"+string(n.Channel)+":"+n.Recipient)
 	if err != nil {
 		telemetry.L(ctx).ErrorContext(ctx, "rate limiter unreachable, backing off", "error", err)
-		return s.repo.ScheduleRetry(ctx, id, time.Now().Add(1*time.Minute))
+		retryErr := s.repo.ScheduleRetry(ctx, id, time.Now().Add(1*time.Minute))
+		if retryErr == nil {
+			_ = s.statusPub.PublishWithDetail(ctx, id.String(), string(domain.StatusPending), "rate_limiter_unavailable")
+		}
+		return retryErr
 	}
 
 	if !allowed {
 		telemetry.L(ctx).InfoContext(ctx, "rate limit hit: delaying notification")
 		telemetry.RateLimitHits.WithLabelValues(string(n.Channel)).Inc()
-		return s.repo.ScheduleRetry(ctx, id, time.Now().Add(1*time.Minute))
+		retryErr := s.repo.ScheduleRetry(ctx, id, time.Now().Add(1*time.Minute))
+		if retryErr == nil {
+			_ = s.statusPub.PublishWithDetail(ctx, id.String(), string(domain.StatusPending), "rate_limited")
+		}
+		return retryErr
 	}
 
 	// 3. Rendering
@@ -134,7 +145,11 @@ func (s *DeliveryService) handleFailure(ctx context.Context, n *domain.Notificat
 
 	retryAt := time.Now().Add(backoff.Calculate(n.RetryCount))
 	_ = s.repo.UpdateStatus(ctx, n.ID, domain.StatusPending, n.RetryCount+1, &errMsg)
-	return s.repo.ScheduleRetry(ctx, n.ID, retryAt)
+	retryErr := s.repo.ScheduleRetry(ctx, n.ID, retryAt)
+	if retryErr == nil {
+		_ = s.statusPub.PublishWithDetail(ctx, n.ID.String(), string(domain.StatusPending), "retry_scheduled")
+	}
+	return retryErr
 }
 
 func NewDeliveryService(
