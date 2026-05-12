@@ -1,0 +1,4 @@
+# https://golangci-lint.run/usage/configuration/
+run:
+  # CI runners can exceed the default timeout while loading packages (go/packages).
+  timeout: 7m
