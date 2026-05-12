@@ -10,9 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"notification-system/internal/domain"
 	mypostgres "notification-system/internal/platform/postgres"
@@ -26,7 +24,7 @@ func setupTestDB(t *testing.T) (*pgxpool.Pool, func()) {
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("user"),
 		postgres.WithPassword("password"),
-		testcontainers.WithWaitStrategy(wait.ForListeningPort("5432/tcp")),
+		postgres.BasicWaitStrategies(),
 	)
 	require.NoError(t, err)
 
